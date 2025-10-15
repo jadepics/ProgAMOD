@@ -1,0 +1,7 @@
+task_id,time,predecessors
+A,6,
+B,3,A
+C,4,A
+D,5,B|C
+E,2,C
+F,7,D|E
