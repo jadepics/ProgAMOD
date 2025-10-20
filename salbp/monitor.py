@@ -5,13 +5,16 @@ import math, csv, os
 import matplotlib.pyplot as plt
 from gurobipy import GRB
 
+#classe per file di monitoraggio fa callback su Gurobi e raccoglie i dati (ProgressLogger)-> grafici
+# plot_progress, plot_gap, plot_station_loads AL MOMENTO NON FUNZIONANO
+
 @dataclass
 class Snapshot:
-    t: float           # runtime (s)
-    best: float | None # incumbent objective (C)
-    bound: float | None# best bound
-    gap: float | None  # relative gap (0..1) if both best&bound known
-    nodes: float       # explored nodes (can be large)
+    t: float           # tempo di runtime (s)
+    best: float | None # miglior soluzione finora (C)
+    bound: float | None# best bound corrente
+    gap: float | None  # relative gap (0..1) se both best&bound known
+    nodes: float       # nodi esplorati nel b&b
 
 class ProgressLogger:
     def __init__(self):

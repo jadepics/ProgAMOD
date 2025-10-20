@@ -11,7 +11,7 @@ from salbp.instance import Instance
 from salbp.model import SALBPMinMaxModel
 from salbp.metrics import balance_metrics
 
-# Se hai creato monitor.py come ti avevo mostrato:
+#si chiama monitor per gestire la costruzione dei grafici
 try:
     from salbp.monitor import ProgressLogger, plot_progress, plot_gap, plot_station_loads
     HAVE_MONITOR = True

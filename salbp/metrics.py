@@ -2,10 +2,12 @@ from __future__ import annotations
 from typing import List, Dict
 import math, statistics
 
+#qui vengono gestite le metriche di bilanciamento
+
 def balance_metrics(loads: List[float]) -> Dict[str, float]:
     if not loads: return {}
     M = len(loads); C = max(loads); tot = sum(loads)
-    LB = math.ceil(tot / M) if M>0 else 0
+    LB = math.ceil(tot / M) if M>0 else 0  #lower bound
     rng = max(loads)-min(loads) if loads else 0
     var = statistics.pvariance(loads) if len(loads)>1 else 0.0
     util = tot/(M*C) if C>0 else 1.0

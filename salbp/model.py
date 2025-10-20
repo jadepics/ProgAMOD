@@ -5,6 +5,9 @@ import gurobipy as gp
 from gurobipy import GRB
 from salbp.instance import Instance
 
+
+#qui dentro viene costruito il PLI da utilizzare scon Gurobi che viene infatti importata
+
 @dataclass
 class Solution:
     status: str

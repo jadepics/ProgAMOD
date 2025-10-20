@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from typing import Dict, List
 import csv
 
+#questa è la classe che carica e valida i dati dal file excel
+
 @dataclass
 class Instance:
     tasks: List[str]
