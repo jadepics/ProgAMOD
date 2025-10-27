@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import List, Dict
 import math, statistics
 
-#qui vengono gestite le metriche di bilanciamento
+#qui vengono gestite le metriche di bilanciamento = lower bound
 
 def balance_metrics(loads: List[float]) -> Dict[str, float]:
     if not loads: return {}

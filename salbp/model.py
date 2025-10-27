@@ -98,7 +98,7 @@ class SALBPMinMaxModel:
         if log:
             self.model.Params.OutputFlag = 1
 
-        # Esegui con/ senza callback
+        # Esegui con/ senza callback ---> richiama Gurobi
         if cb is not None:
             self.model.optimize(cb)
         else:
