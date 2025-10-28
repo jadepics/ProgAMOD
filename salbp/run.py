@@ -1,6 +1,9 @@
 from __future__ import annotations
 import argparse, os
 from pathlib import Path
+import argparse
+import time
+from pathlib import Path
 
 try:
     import pandas as pd
@@ -44,8 +47,148 @@ def plot_station_loads_fallback(loads_dict, outpath):
     plt.close()
 
 
+
+def plot_progress(times, best_series, bound_series, final_best,
+                  out_incumbent_bound, out_gap, scale_mode: str = "raw"):
+    """
+    Grafici di progresso per MIP in *unità reali* (default "raw") oppure "normalized".
+    - Ordina e deduplica per timestamp.
+    - Traccia *a gradini* (step) con marker sui punti veri.
+    - In "raw": aggiunge una linea orizzontale a y = final_best.
+    - Gap in percentuale su asse log.
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import math
+        import numpy as np
+    except Exception as e:
+        print(f"[INFO] matplotlib non disponibile: salto progress ({e})")
+        return
+
+    # Dati minimi se manca tutto
+    if not times or len(times) != len(best_series) or len(times) != len(bound_series):
+        times = [0.0]
+        best_series = [final_best]
+        bound_series = [final_best]
+
+    # --- pulizia + ordinamento ---
+    def fnum(x):
+        try:
+            x = float(x)
+            return x if math.isfinite(x) else None
+        except Exception:
+            return None
+
+    recs = []
+    for t, b, bd in zip(times, best_series, bound_series):
+        t = fnum(t)
+        if t is None:
+            continue
+        recs.append((t, fnum(b), fnum(bd)))
+    if not recs:
+        recs = [(0.0, fnum(final_best), fnum(final_best))]
+    recs.sort(key=lambda r: r[0])
+
+    # --- deduplica timestamp quasi uguali ---
+    eps = 1e-9
+    cleaned = []
+    for t, b, bd in recs:
+        if cleaned and abs(t - cleaned[-1][0]) < eps:
+            lt, lb, lbd = cleaned[-1]
+            cleaned[-1] = (t, b if b is not None else lb, bd if bd is not None else lbd)
+        else:
+            cleaned.append((t, b, bd))
+
+    t = [r[0] for r in cleaned]
+    b = [r[1] for r in cleaned]
+    bd = [r[2] for r in cleaned]
+
+    # --- scaling ---
+    if scale_mode == "normalized":
+        scale = None
+        if isinstance(final_best, (int, float)) and final_best not in (None, 0):
+            scale = float(final_best)
+        if scale is None:
+            # fallback: ultimo valor finito
+            for v in reversed(b):
+                if v is not None:
+                    scale = float(v); break
+        if scale is None:
+            for v in reversed(bd):
+                if v is not None:
+                    scale = float(v); break
+        if scale is None:
+            scale = 1.0
+        y_best  = [ (vv/scale) if vv is not None else np.nan for vv in b  ]
+        y_bound = [ (vv/scale) if vv is not None else np.nan for vv in bd ]
+        ref_y   = 1.0
+        y_label = "Valore normalizzato"
+        title   = "Evoluzione incumbent vs bound (normalizzato)"
+    else:
+        # RAW: usa direttamente i numeri del callback + snapshot finale
+        y_best  = [ vv if vv is not None else np.nan for vv in b  ]
+        y_bound = [ vv if vv is not None else np.nan for vv in bd ]
+        ref_y   = final_best if isinstance(final_best, (int, float)) else None
+        y_label = "Valore obiettivo"
+        title   = "Evoluzione incumbent vs bound"
+
+    # Utility: trasformazione in "step post"
+    def to_step(tt, yy):
+        xs, ys = [], []
+        if not tt:
+            return xs, ys
+        xs.append(tt[0]); ys.append(yy[0])
+        for i in range(1, len(tt)):
+            xs.append(tt[i]); ys.append(yy[i-1])  # orizzontale
+            xs.append(tt[i]); ys.append(yy[i])    # salto
+        return xs, ys
+
+    t_step, yb_step  = to_step(t, y_best)
+    _,      ybd_step = to_step(t, y_bound)
+
+    # --- Incumbent & Bound ---
+    plt.figure(figsize=(10.5, 5))
+    plt.step(t_step, yb_step,  where="post", label="Incumbent")
+    if np.isfinite(y_bound).any():
+        plt.step(t_step, ybd_step, where="post", label="Best bound")
+    plt.scatter(t, y_best,  s=22)
+    if np.isfinite(y_bound).any():
+        plt.scatter(t, y_bound, s=22)
+
+    if ref_y is not None and math.isfinite(ref_y):
+        plt.axhline(ref_y, linestyle="--", linewidth=1, alpha=0.8, label=("C*" if scale_mode=="raw" else "1.0"))
+
+    plt.xlabel("Tempo (s)")
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_incumbent_bound, dpi=150)
+    plt.close()
+
+    # --- Gap % (log) ---
+    gaps = []
+    for iv, jv in zip(b, bd):
+        if iv is None or jv is None or abs(iv) < 1e-12:
+            gaps.append(np.nan)
+        else:
+            gaps.append(abs(iv - jv) / (abs(iv) + 1e-9) * 100.0)
+
+    gx, gy = to_step(t, gaps)
+    plt.figure(figsize=(10.5, 5))
+    plt.step(gx, gy, where="post")
+    plt.yscale("log")
+    plt.xlabel("Tempo (s)")
+    plt.ylabel("Gap relativo (%)")
+    plt.title("Gap relativo vs tempo (scala log)")
+    plt.tight_layout()
+    plt.savefig(out_gap, dpi=150)
+    plt.close()
+
+
 def main():
     import argparse
+    import time
     from pathlib import Path
 
     ap = argparse.ArgumentParser(description="SALBP Balanced (Gurobi) – Min C")
@@ -65,15 +208,16 @@ def main():
     model = SALBPMinMaxModel(inst, num_stations=args.stations)
     model.build()
 
-    # 3) Logger/Monitor se disponibile
+    # 3) Logger (event-based)
     logger = None
     try:
         if 'ProgressLogger' in globals():
-            logger = ProgressLogger()
+            logger = ProgressLogger(min_dt=0.0)  # nessun throttling
     except Exception:
         logger = None
 
     # 4) Risolvi
+    t0 = time.perf_counter()
     sol = model.solve(
         time_limit=(args.time_limit if args.time_limit and args.time_limit > 0 else None),
         mip_gap=args.mip_gap,
@@ -81,6 +225,7 @@ def main():
         log=args.log,
         cb=logger
     )
+    total_elapsed = time.perf_counter() - t0
 
     print(f"Status        : {sol.status}")
     print(f"Min max load C: {sol.C}")
@@ -89,55 +234,54 @@ def main():
     loads_sorted = sorted(sol.station_loads, key=lambda t: t[0])  # [(stazione, carico)]
     for s, l in loads_sorted:
         print(f"Stazione {s}: {l}")
-    for t, s in sorted(sol.assignment, key=lambda x: (x[1], x[0])):
-        print(f"Task {t} -> Stazione {s}")
+    for tsk, st in sorted(sol.assignment, key=lambda x: (x[1], x[0])):
+        print(f"Task {tsk} -> Stazione {st}")
 
-    # 6) Metriche
+    # 6) Metriche (se servono)
     loads_only = [l for _, l in loads_sorted]
     m = balance_metrics(loads_only)
     print("-- Metriche --")
     for k, v in m.items():
         print(f"{k}: {v}")
 
-    # 7) Cartella output
+    # 7) Output dir
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # 8) SEMPRE: grafico carichi per stazione
-    loads_dict = {s: l for s, l in loads_sorted}
+    # 8) Progress: prendi snapshot + aggiungi sempre il finale
+    time_s, best, bound = [], [], []
     try:
-        # prova a usare la funzione (se è stata importata altrove)
-        plot_station_loads(loads_dict, str(outdir / "station_loads.png"))  # type: ignore[name-defined]
-        print(f"[OK] station_loads.png scritto in {outdir} (monitor)")
-    except NameError:
-        # fallback locale
-        plot_station_loads_fallback(loads_dict, str(outdir / "station_loads.png"))
-        print(f"[OK] station_loads.png scritto in {outdir} (fallback)")
-    except Exception as e:
-        print(f"[WARN] station_loads.png non generato: {e}")
-
-    # 9) Grafici di progresso solo se ci sono snapshot
-    try:
-        has_snaps = (logger is not None) and hasattr(logger, "snaps") and len(logger.snaps) > 0
-        if has_snaps:
-            logger.to_csv(str(outdir / "progress.csv"))
+        if logger is not None and hasattr(logger, "snaps"):
             time_s = [s.t for s in logger.snaps]
             best   = [s.best for s in logger.snaps]
             bound  = [s.bound for s in logger.snaps]
-            gap    = [s.gap for s in logger.snaps]
-            try:
-                plot_progress(time_s, best, bound, str(outdir / "progress_incumbent_bound.png"))  # type: ignore[name-defined]
-                plot_gap(time_s, gap, str(outdir / "progress_gap.png"))  # type: ignore[name-defined]
-                print(f"[OK] progress.csv e grafici di progresso scritti in {outdir} (monitor)")
-            except NameError:
-                # Nessun fallback qui: i progress hanno senso solo con il monitor
-                print("[INFO] Funzioni di plot del monitor non disponibili: skip progress_*.png")
-        else:
-            print("[INFO] Nessuno snapshot dal callback: salto progress.csv/progress_*.png")
-    except Exception as e:
-        print(f"[WARN] Grafici di progresso non generati: {e}")
 
-    # 10) CSV risultati
+        final_bound = sol.C if str(sol.status).upper() == "OPTIMAL" else None
+        if logger is not None and hasattr(logger, "finalize"):
+            logger.finalize(best=sol.C, bound=final_bound)
+            time_s = [s.t for s in logger.snaps]
+            best   = [s.best for s in logger.snaps]
+            bound  = [s.bound for s in logger.snaps]
+
+        # progress.csv (semplice)
+        import csv
+        with open(outdir / "progress.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["t", "best", "bound"])
+            w.writeheader()
+            for t, b, bd in zip(time_s, best, bound):
+                w.writerow({"t": f"{t:.9f}", "best": "" if b is None else b, "bound": "" if bd is None else bd})
+
+        # ★★★ Plot finale in UNITÀ REALI (raw) — niente più numeri “strani”
+        plot_progress(time_s, best, bound, sol.C,
+                      str(outdir / "progress_incumbent_bound.png"),
+                      str(outdir / "progress_gap.png"),
+                      scale_mode="raw")
+
+        print(f"[OK] progress_*.png scritti in {outdir}")
+    except Exception as e:
+        print(f"[WARN] Sezione progress fallita: {e}")
+
+    # 9) CSV risultati
     import csv as _csv
     with open(outdir / "station_loads.csv", "w", newline="", encoding="utf-8") as f:
         w = _csv.DictWriter(f, fieldnames=["station", "load"])
@@ -157,6 +301,7 @@ def main():
         w.writerow(m)
 
     print(f"[OK] CSV salvati in {outdir}")
+
 
 
 
