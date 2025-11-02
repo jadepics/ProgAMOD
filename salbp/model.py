@@ -89,7 +89,8 @@ class SALBPMinMaxModel:
               log: bool = False,
               cb=None) -> Solution:
         # Parametri del solver
-        if time_limit is not None:
+
+        if time_limit is not None and time_limit > 0:
             self.model.Params.TimeLimit = float(time_limit)
         if mip_gap is not None:
             self.model.Params.MIPGap = float(mip_gap)
@@ -97,6 +98,9 @@ class SALBPMinMaxModel:
             self.model.Params.Threads = int(threads)
         if log:
             self.model.Params.OutputFlag = 1
+
+        print(
+            f"[DBG] TimeLimit={self.model.Params.TimeLimit}, MIPGap={self.model.Params.MIPGap}, Threads={self.model.Params.Threads}")
 
         # Esegui con/ senza callback ---> richiama Gurobi
         if cb is not None:
