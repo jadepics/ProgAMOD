@@ -2,6 +2,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+
+from salbp.metrics import build_run_summary, save_run_metrics_per_formulation
+from salbp.monitor import plot_progress_compare, plot_gap_compare
+
 try:
     import pandas as pd
 except Exception:
@@ -31,8 +35,6 @@ def resolve_tasks_path(raw: str) -> Path:
     raise FileNotFoundError(f"CSV non trovato: {raw}\nProvati:\n" + "\n".join(str(p) for p in candidates))
 
 def solve_and_report(model, inst, args, outdir: Path, tag: str):
-    outdir.mkdir(parents=True, exist_ok=True)
-
     logger = ProgressLogger()
     sol = model.solve(time_limit=args.time_limit,
                       mip_gap=args.mip_gap,
@@ -61,8 +63,26 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
     if getattr(m, "MIPGap", None) is not None:
         print(f"Gap finale : {100*float(m.MIPGap):.4f}%")
 
+        loads = [l for _, l in sorted(sol.station_loads)]
+        m = model.model
+        row = build_run_summary(
+            formulation=tag,
+            instance_name=Path(args.tasks).name,
+            loads=loads,
+            obj_C=sol.C,
+            bound=float(getattr(m, "ObjBound", float("nan"))) if getattr(m, "SolCount", 0) else None,
+            runtime=float(getattr(m, "Runtime", 0.0)),
+            nodes=int(getattr(m, "NodeCount", 0)),
+        )
+        save_run_metrics_per_formulation(Path(args.outdir), tag, row)
+
+        # salva progress/plot singoli come già fai...
+        logger.to_csv(str(outdir / "progress.csv"))
+        # (resituisci per confronto)
+        return sol, logger
+
     # carichi / assegnamento
-    loads = [l for _, l in sorted(sol.station_loads)]
+'''loads = [l for _, l in sorted(sol.station_loads)]
     print("-- Carichi --")
     for s, l in sorted(sol.station_loads):
         print(f"Stazione {s}: {l}")
@@ -87,6 +107,8 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
         pd.DataFrame([{"station":s,"load":l} for s,l in sol.station_loads]).to_csv(outdir/"station_loads.csv", index=False)
         pd.DataFrame([{"task_id":t,"station":s} for t,s in sol.assignment]).to_csv(outdir/"assignment.csv", index=False)
         pd.DataFrame([mtr]).to_csv(outdir/"metrics.csv", index=False)
+'''
+
 
 def main():
     ap = argparse.ArgumentParser(description="SALBP Balanced – Min C (y / prefix)")
@@ -119,6 +141,26 @@ def main():
         mdl_p = SALBPPrefixModel(inst, args.stations)
         mdl_p.build()
         solve_and_report(mdl_p, inst, args, Path(args.outdir)/"prefix", tag="prefix")
+
+    if args.formulation in ("y", "both"):
+        mdl_y = SALBPMinMaxModel(inst, args.stations);
+        mdl_y.build()
+        sol_y, log_y = solve_and_report(mdl_y, inst, args, Path(args.outdir) / "y", tag="y")
+
+    if args.formulation in ("prefix", "both"):
+        mdl_p = SALBPPrefixModel(inst, args.stations);
+        mdl_p.build()
+        sol_p, log_p = solve_and_report(mdl_p, inst, args, Path(args.outdir) / "prefix", tag="prefix")
+
+    # Grafici comparativi se both
+    if args.formulation == "both":
+        base = Path(args.outdir)
+        plot_progress_compare(base / "y" / "progress.csv", base / "prefix" / "progress.csv",
+                              str(base / "compare" / "progress_compare.png"))
+        plot_gap_compare(base / "y" / "progress.csv", base / "prefix" / "progress.csv",
+                         str(base / "compare" / "gap_compare.png"))
+        print(f"\nGrafici comparativi salvati in: {base / 'compare'}")
+
 
 if __name__ == "__main__":
     main()

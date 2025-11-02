@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 from gurobipy import GRB
 import time
 from types import SimpleNamespace
+from pathlib import Path
+
 
 #classe per file di monitoraggio fa callback su Gurobi e raccoglie i dati (ProgressLogger)-> grafici
 # plot_progress, plot_gap, plot_station_loads AL MOMENTO NON FUNZIONANO
@@ -171,5 +173,60 @@ def plot_station_loads(loads: Dict[int, float], out_png: str):
     plt.title("Carichi per stazione")
     plt.tight_layout()
     os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
+    plt.savefig(out_png, dpi=150)
+    plt.close()
+
+def _load_progress_csv(path: Path):
+    T, B, D, G = [], [], [], []
+    if not path.exists():
+        return T, B, D, G
+    with path.open("r", encoding="utf-8") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            t = float(row["t"]) if row.get("t") else None
+            b = float(row["best"]) if row.get("best") not in ("", None) else None
+            d = float(row["bound"]) if row.get("bound") not in ("", None) else None
+            g = float(row["gap"]) if row.get("gap") not in ("", None) else None
+            if t is not None:
+                T.append(t); B.append(b); D.append(d); G.append(g)
+    return T, B, D, G
+
+def plot_progress_compare(y_csv: Path, p_csv: Path, out_png: str):
+    Ty, By, Dy, _ = _load_progress_csv(y_csv)
+    Tp, Bp, Dp, _ = _load_progress_csv(p_csv)
+    plt.figure()
+    if By and any(v is not None for v in By):
+        plt.plot(Ty, [v for v in By], label="y – incumbent")
+    if Dy and any(v is not None for v in Dy):
+        plt.plot(Ty, [v for v in Dy], label="y – bound")
+    if Bp and any(v is not None for v in Bp):
+        plt.plot(Tp, [v for v in Bp], label="prefix – incumbent", linestyle="--")
+    if Dp and any(v is not None for v in Dp):
+        plt.plot(Tp, [v for v in Dp], label="prefix – bound", linestyle="--")
+    plt.xlabel("Tempo (s)")
+    plt.ylabel("Valore obiettivo")
+    plt.title("Incumbent & bound – confronto y vs prefix")
+    if len(plt.gca().lines) > 0:
+        plt.legend()
+    plt.tight_layout()
+    Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_png, dpi=150)
+    plt.close()
+
+def plot_gap_compare(y_csv: Path, p_csv: Path, out_png: str):
+    Ty, _, _, Gy = _load_progress_csv(y_csv)
+    Tp, _, _, Gp = _load_progress_csv(p_csv)
+    plt.figure()
+    if Gy and any(v not in (None, 0) for v in Gy):
+        plt.semilogy(Ty, [g if g and g > 0 else 1e-12 for g in Gy], label="y")
+    if Gp and any(v not in (None, 0) for v in Gp):
+        plt.semilogy(Tp, [g if g and g > 0 else 1e-12 for g in Gp], label="prefix")
+    plt.xlabel("Tempo (s)")
+    plt.ylabel("Gap relativo (%)")
+    plt.title("Gap – confronto y vs prefix")
+    if len(plt.gca().lines) > 0:
+        plt.legend()
+    plt.tight_layout()
+    Path(out_png).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_png, dpi=150)
     plt.close()
