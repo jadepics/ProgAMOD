@@ -5,10 +5,22 @@ from time import monotonic
 from typing import Dict, List, Tuple, Optional, Set, Any
 
 @dataclass
+class LSStep:
+    step: int
+    t: float
+    C: int
+    rng: int
+    var: float
+    task: Any | None
+    s_from: int | None
+    s_to: int | None
+
+@dataclass
 class LSSolution:
     station_of: Dict[Any, int]   # task_id -> station (1..S)
     loads: List[int]             # loads[s-1]
     C: int
+    trace: List[LSStep] | None = None
 
 # ---- metriche per tie-break ----
 def _range_metric(loads: List[int]) -> int:
@@ -69,13 +81,15 @@ def _first_improving_move(tasks_in_s: List[Any],
                           times: Dict[Any, int],
                           S: int,
                           accept_equal: bool,
-                          tie_metric: str) -> Optional[Tuple[Any, int]]:
+                          tie_metric: str,
+                          cap_C: Optional[int]) -> Optional[Tuple[Any, int]]:
     # ordina per impatto (tempi grandi prima)
     candidates = sorted(tasks_in_s, key=lambda i: times[i], reverse=True)
     # mete dalla più leggera alla più leggera
     station_order = sorted(range(1, S + 1), key=lambda s: loads[s - 1])
 
     cur_metric = _var_metric(loads) if tie_metric == "var" else _range_metric(loads)
+    cap = cap_C if cap_C is not None else C
 
     for i in candidates:
         s = station_of[i]
@@ -89,10 +103,13 @@ def _first_improving_move(tasks_in_s: List[Any],
             new_loads = loads[:]   # S è piccolo, copia ok
             new_loads[s - 1]  -= times[i]
             new_loads[s2 - 1] += times[i]
+            # rispetto del cap: nessuna stazione può superare cap
+            if new_loads[s2 - 1] > cap:
+                continue
             new_C = max(new_loads)
 
             # 1) miglioramento duro su C
-            if new_C < C and new_loads[s2 - 1] <= C:
+            if new_C < C:
                 return (i, s2)
 
             # 2) se ammesso, tie-break a C invariato
@@ -107,11 +124,14 @@ def one_move_local_search(instance,
                           station_of: Dict[Any, int],
                           time_limit: Optional[float] = 2.0,
                           accept_equal: bool = False,
-                          tie_metric: str = "range") -> LSSolution:
+                          tie_metric: str = "range",
+                          cap_C: Optional[int] = None,
+                          record: bool = True) -> LSSolution:
     """
-    Local search 1-move:
+    Local search 1-move con trace:
       - riduce C spostando un task per volta da stazioni critiche verso mete ammissibili;
-      - opzionalmente accetta mosse con C invariato se migliorano 'range' o 'var'.
+      - opzionalmente accetta mosse con C invariato se migliorano 'range' o 'var';
+      - se record=True, restituisce trace step-by-step (per CSV/plot).
     """
     tasks = list(instance.tasks)
     times = instance.times
@@ -121,7 +141,15 @@ def one_move_local_search(instance,
     st = dict(station_of)
     loads, C = _recompute_loads_C(st, times, S)
 
+    trace: List[LSStep] = []
     t0 = monotonic()
+
+    # step 0: baseline
+    if record:
+        trace.append(LSStep(step=0, t=0.0, C=C, rng=_range_metric(loads), var=_var_metric(loads),
+                            task=None, s_from=None, s_to=None))
+
+    step = 0
     while True:
         if time_limit is not None and (monotonic() - t0) >= time_limit:
             break
@@ -136,7 +164,7 @@ def one_move_local_search(instance,
             if not tasks_in_s:
                 continue
             mv = _first_improving_move(tasks_in_s, st, loads, C, ES, LS, times, S,
-                                       accept_equal=accept_equal, tie_metric=tie_metric)
+                                       accept_equal=accept_equal, tie_metric=tie_metric, cap_C=cap_C)
             if mv:
                 i, s2 = mv
                 s1 = st[i]
@@ -144,9 +172,14 @@ def one_move_local_search(instance,
                 loads[s2 - 1] += times[i]
                 st[i] = s2
                 C = max(loads)
+                step += 1
+                if record:
+                    trace.append(LSStep(step=step, t=monotonic()-t0, C=C,
+                                        rng=_range_metric(loads), var=_var_metric(loads),
+                                        task=i, s_from=s1, s_to=s2))
                 improved = True
                 break
         if not improved:
             break
 
-    return LSSolution(station_of=st, loads=loads, C=C)
+    return LSSolution(station_of=st, loads=loads, C=C, trace=trace if record else None)

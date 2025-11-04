@@ -17,6 +17,7 @@ from salbp.model import SALBPMinMaxModel          # modello "y"
 from salbp.model_prefix import SALBPPrefixModel   # modello "prefix"
 from salbp.metrics import balance_metrics
 from salbp.monitor import ProgressLogger, plot_progress, plot_gap, plot_station_loads
+from salbp.vnd import vnd_search  # VND metaeuristica
 
 
 def resolve_tasks_path(raw: str) -> Path:
@@ -54,19 +55,17 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
     except Exception:
         pass
 
-    # --- 1-MOVE (opzionale, PRIMA dei salvataggi) ---
+    # --- 1-MOVE le, PRIMA dei salvataggi) ---
     try:
         if getattr(args, "post_1move", False):
             print(f"[LS 1-move:{tag}] start...")
 
-            # 1) Prova a usare direttamente sol.assignment se presente
+            # 1) assignment dalla soluzione o dalle x vars
             st_map = {}
             ass = getattr(sol, "assignment", None)
             if ass:
-                # sol.assignment è iterabile: [(task, station), ...]
                 st_map = {t: s for (t, s) in ass}
             else:
-                # 2) Fallback: estrai dalle variabili del modello (tipico: model.x[(i,s)])
                 try:
                     xvars = getattr(model, "x", None) or {}
                     tmp = {}
@@ -76,18 +75,16 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                         except Exception:
                             val = float(getattr(var, "X", 0.0))
                         if val >= 0.5:
-                            # key può essere (i, s) oppure una chiave diversa: gestiamo il caso tuple
                             if isinstance(key, tuple) and len(key) == 2:
                                 i, s = key
                             else:
-                                # se il nome della var è tipo "x[A,3]" o "x_A_3" non lo parsiamo qui: meglio fallire chiaro
-                                raise RuntimeError("Forma delle chiavi x non supportata: usa tuple (task, station).")
+                                raise RuntimeError("Chiavi x non supportate (attese tuple (task, station)).")
                             tmp[i] = int(s)
                     st_map = tmp
-                except Exception as _e:
+                except Exception:
                     st_map = {}
 
-            # 3) Armonizza il tipo dei task_id (string vs int) per farli combaciare con inst.tasks
+            # 2) armonizza tipo id task
             try:
                 if st_map:
                     sample_inst = next(iter(inst.tasks))
@@ -102,16 +99,40 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
             if not st_map:
                 raise RuntimeError("Impossibile costruire l'assegnamento per la 1-move (assignment mancante).")
 
-            # 4) Esegui la 1-move
+            # 3) esegui LS con trace
+            from salbp.ls_one_move import one_move_local_search
             ls = one_move_local_search(inst,
                                        S=args.stations,
                                        station_of=st_map,
-                                       time_limit=getattr(args, "ls_secs", 2.0))
+                                       time_limit=getattr(args, "ls_secs", 2.0),
+                                       accept_equal=getattr(args, "ls_accept_equal", False) if hasattr(args,
+                                                                                                       "ls_accept_equal") else False,
+                                       tie_metric=getattr(args, "ls_tie", "range") if hasattr(args,
+                                                                                              "ls_tie") else "range",
+                                       cap_C=None,
+                                       record=True)
 
+            # 4) salva report LS (CSV + PNG) se richiesto
+            try:
+                if getattr(args, "ls_report", False) and ls.trace:
+                    ls_dir = outdir / "ls_1move"
+                    ls_dir.mkdir(parents=True, exist_ok=True)
+                    from salbp.ls_report import save_ls_csv, plot_ls_c, plot_ls_metric
+                    save_ls_csv(ls.trace, ls_dir / "ls_trace.csv")
+                    plot_ls_c(ls.trace, ls_dir / "ls_C_over_steps.png", by="step")
+                    plot_ls_metric(ls.trace, ls_dir / "ls_range_over_steps.png", metric="range", by="step")
+                    plot_ls_metric(ls.trace, ls_dir / "ls_var_over_steps.png", metric="var", by="step")
+                    # versione "by time" facoltativa:
+                    # plot_ls_c(ls.trace, ls_dir / "ls_C_over_time.png", by="time")
+                    # plot_ls_metric(ls.trace, ls_dir / "ls_range_over_time.png", metric="range", by="time")
+                    # plot_ls_metric(ls.trace, ls_dir / "ls_var_over_time.png", metric="var", by="time")
+            except Exception as _eplot:
+                print(f"[LS 1-move:{tag}] report LS non salvato: {_eplot}")
+
+            # 5) applica miglioramento se C scende (o lascialo come reference se reporting only)
             C_before = sol.C if sol.C is not None else float("inf")
             if ls.C < C_before:
                 print(f"[LS 1-move:{tag}] miglioramento: C {C_before} -> {ls.C} (Δ={C_before - ls.C})")
-                # ricostruisci il "sol" con i nuovi dati
                 new_assignment = sorted(ls.station_of.items(), key=lambda x: (x[1], x[0]))
                 new_station_loads = [(s, float(l)) for s, l in enumerate(ls.loads, start=1)]
                 sol = type(sol)(
@@ -125,7 +146,40 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
     except Exception as e:
         print(f"[LS 1-move:{tag}] SKIP per errore: {e}")
 
+    # --- VND (opzionale) ---
+    try:
+        if getattr(args, "post_vnd", False):
+            print(f"[VND:{tag}] start...")
+            # prendi l'assegnamento corrente (già migliorato da 1-move se attivo)
+            st_map = {t: s for (t, s) in sol.assignment} if getattr(sol, "assignment", None) else {}
+            if not st_map:
+                raise RuntimeError("VND: assignment mancante.")
+            vnd = vnd_search(inst,
+                             S=args.stations,
+                             station_of=st_map,
+                             time_limit=float(getattr(args, "vnd_secs", 5.0)),
+                             accept_equal=bool(getattr(args, "vnd_accept_equal", False)),
+                             tie_metric=str(getattr(args, "vnd_tie", "range")),
+                             use_swap=True,
+                             use_ejection=True)
+            if vnd.C < sol.C:
+                print(f"[VND:{tag}] miglioramento: C {sol.C} -> {vnd.C} (iters={vnd.iters}, "
+                      f"1m={vnd.moves_1move}, sw={vnd.moves_swap}, ej={vnd.moves_eject})")
+                new_assignment = sorted(vnd.station_of.items(), key=lambda x: (x[1], x[0]))
+                new_station_loads = [(s, float(l)) for s, l in enumerate(vnd.loads, start=1)]
+                sol = type(sol)(
+                    status=sol.status,
+                    C=float(vnd.C),
+                    assignment=new_assignment,
+                    station_loads=new_station_loads
+                )
+            else:
+                print(f"[VND:{tag}] nessun miglioramento (C = {sol.C})")
+    except Exception as e:
+        print(f"[VND:{tag}] SKIP per errore: {e}")
+
     # --- REPORT / SALVATAGGI ---
+
     m = model.model
     try:
         print(f"\n== [{tag}] ==")
@@ -192,57 +246,95 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
     return sol, logger
 
 def solve_heuristic_only(inst, args, outdir: Path):
-        from salbp.constructive import construct_targetC
-        outdir.mkdir(parents=True, exist_ok=True)
+    from salbp.constructive import construct_targetC
+    outdir.mkdir(parents=True, exist_ok=True)
 
-        order = "rpw" if args.heuristic == "targetC-rpw" else "lpt"
-        print(f"[HEUR] Costruttiva: Target-C ({order})")
+    order = "rpw" if args.heuristic == "targetC-rpw" else "lpt"
+    print(f"[HEUR] Costruttiva: Target-C ({order})")
 
-        st_map, loads, C = construct_targetC(inst,
-                                             S=args.stations,
-                                             order=order,
-                                             eps_step=args.target_eps_step)
+    st_map, loads, C = construct_targetC(inst,
+                                         S=args.stations,
+                                         order=order,
+                                         eps_step=args.target_eps_step)
 
-        if not st_map:
-            print("[HEUR] Fallita la costruzione con Target-C: aumenta --target-eps-step o S.")
-            return
+    if not st_map:
+        print("[HEUR] Fallita la costruzione con Target-C: aumenta --target-eps-step o S.")
+        return
 
-        # opzionale: rifinitura 1-move
-        if getattr(args, "post_1move", False):
-            print("[HEUR] 1-move post-costruzione...")
-            from salbp.ls_one_move import one_move_local_search
-            ls = one_move_local_search(inst,
-                                       S=args.stations,
-                                       station_of=st_map,
-                                       time_limit=getattr(args, "ls_secs", 2.0),
-                                       accept_equal=getattr(args, "ls_accept_equal", False) if hasattr(args,
-                                                                                                       "ls_accept_equal") else False,
-                                       tie_metric=getattr(args, "ls_tie", "range") if hasattr(args,
-                                                                                              "ls_tie") else "range")
-            if ls.C < C or (ls.C == C and sum(ls.loads) == sum(loads)):
-                st_map, loads, C = ls.station_of, ls.loads, ls.C
-                print(f"[HEUR] 1-move done. C = {C}")
+    # opzionale: rifinitura 1-move
+    if getattr(args, "post_1move", False):
+        print("[HEUR] 1-move post-costruzione...")
+        from salbp.ls_one_move import one_move_local_search
+        ls = one_move_local_search(inst,
+                                   S=args.stations,
+                                   station_of=st_map,
+                                   time_limit=getattr(args, "ls_secs", 2.0),
+                                   accept_equal=getattr(args, "ls_accept_equal", False) if hasattr(args, "ls_accept_equal") else False,
+                                   tie_metric=getattr(args, "ls_tie", "range") if hasattr(args, "ls_tie") else "range",
+                                   cap_C=None,
+                                   record=True)  # registra la trace per i grafici
 
-        # --- report & salvataggi minimi ---
-        print(f"\n== [heuristic] ==")
-        print(f"Obj (C)    : {C}")
+        # --- SALVATAGGIO REPORT 1-MOVE (CSV + PNG) ---
         try:
-            plot_station_loads({s: l for s, l in enumerate(loads, start=1)}, str(outdir / "station_loads.png"))
-        except Exception:
-            pass
+            if getattr(args, "ls_report", False) and ls and ls.trace:
+                ls_dir = outdir / "ls_1move"
+                ls_dir.mkdir(parents=True, exist_ok=True)
+                from salbp.ls_report import save_ls_csv, plot_ls_c, plot_ls_metric
+                save_ls_csv(ls.trace, ls_dir / "ls_trace.csv")
+                plot_ls_c(ls.trace, ls_dir / "ls_C_over_steps.png", by="step")
+                plot_ls_metric(ls.trace, ls_dir / "ls_range_over_steps.png", metric="range", by="step")
+                plot_ls_metric(ls.trace, ls_dir / "ls_var_over_steps.png", metric="var", by="step")
+        except Exception as _eplot:
+            print(f"[HEUR] report LS non salvato: {_eplot}")
+        # --- FINE REPORT 1-MOVE ---
 
+        # applica il miglioramento se C è sceso (o tieni la soluzione costruttiva)
+        if ls.C < C or (ls.C == C and sum(ls.loads) == sum(loads)):
+            st_map, loads, C = ls.station_of, ls.loads, ls.C
+            print(f"[HEUR] 1-move done. C = {C}")
+
+    # 👉👉👉 VND FUORI dall'if precedente, così funziona anche senza --post-1move
+    if getattr(args, "post_vnd", False):
         try:
-            if pd:
-                import pandas as _pd
-                _pd.DataFrame([{"station": s, "load": l} for s, l in enumerate(loads, start=1)]).to_csv(
-                    outdir / "station_loads.csv", index=False)
-                _pd.DataFrame([{"task_id": t, "station": s} for t, s in
-                               sorted(st_map.items(), key=lambda x: (x[1], x[0]))]).to_csv(outdir / "assignment.csv",
-                                                                                           index=False)
-        except Exception:
-            pass
+            print("[HEUR] VND post-costruzione...")
+            vnd = vnd_search(inst,
+                             S=args.stations,
+                             station_of=st_map,
+                             time_limit=float(getattr(args, "vnd_secs", 5.0)),
+                             accept_equal=bool(getattr(args, "vnd_accept_equal", False)),
+                             tie_metric=str(getattr(args, "vnd_tie", "range")),
+                             use_swap=True,
+                             use_ejection=True)
+            if vnd.C < C:
+                st_map, loads, C = vnd.station_of, vnd.loads, vnd.C
+                print(f"[HEUR] VND done. C = {C} (iters={vnd.iters}, 1m={vnd.moves_1move}, sw={vnd.moves_swap}, ej={vnd.moves_eject})")
+            else:
+                print("[HEUR] VND nessun miglioramento")
+        except Exception as e:
+            print(f"[HEUR] VND SKIP per errore: {e}")
 
-        return st_map, loads, C
+    # --- report & salvataggi minimi ---
+    print(f"\n== [heuristic] ==")
+    print(f"Obj (C)    : {C}")
+    try:
+        plot_station_loads({s: l for s, l in enumerate(loads, start=1)}, str(outdir / "station_loads.png"))
+    except Exception:
+        pass
+
+    try:
+        if pd:
+            import pandas as _pd
+            _pd.DataFrame([{"station": s, "load": l} for s, l in enumerate(loads, start=1)]).to_csv(
+                outdir / "station_loads.csv", index=False)
+            _pd.DataFrame([{"task_id": t, "station": s} for t, s in
+                           sorted(st_map.items(), key=lambda x: (x[1], x[0]))]).to_csv(outdir / "assignment.csv",
+                                                                                       index=False)
+    except Exception:
+        pass
+
+    return st_map, loads, C
+
+
 
     # carichi / assegnamento
 '''loads = [l for _, l in sorted(sol.station_loads)]
@@ -296,6 +388,16 @@ def main():
                     help="Permetti mosse con C invariato se migliorano il tie-break.")
     ap.add_argument("--ls-tie", choices=["range", "var"], default="range",
                     help="Metrica di tie-break quando C non migliora (default: range).")
+    ap.add_argument("--ls-report", action="store_true",
+                    help="Salva CSV e grafici dell'esecuzione della 1-move.")
+    ap.add_argument("--post-vnd", action="store_true",
+                    help="Esegui VND (1-move -> swap -> ejection) come rifinitura.")
+    ap.add_argument("--vnd-secs", type=float, default=5.0,
+                    help="Time cap (secondi) per la VND (default: 5.0).")
+    ap.add_argument("--vnd-accept-equal", action="store_true",
+                    help="In VND, permetti miglioramenti a C invariato con tie-break (range/var) nelle fasi locali.")
+    ap.add_argument("--vnd-tie", choices=["range", "var"], default="range",
+                    help="Tie-break quando C non scende (default: range).")
 
     # --- altre opzioni ---
     ap.add_argument("--time-limit", type=int, default=None, help="omesso = senza limite")
