@@ -249,13 +249,20 @@ def solve_heuristic_only(inst, args, outdir: Path):
     from salbp.constructive import construct_targetC
     outdir.mkdir(parents=True, exist_ok=True)
 
-    order = "rpw" if args.heuristic == "targetC-rpw" else "lpt"
-    print(f"[HEUR] Costruttiva: Target-C ({order})")
-
-    st_map, loads, C = construct_targetC(inst,
-                                         S=args.stations,
-                                         order=order,
-                                         eps_step=args.target_eps_step)
+    if args.heuristic == "targetC-bestfit":
+        print("[HEUR] Costruttiva: Target-C (bestfit)")
+        from salbp.greedy_bestfit import construct_targetC_bestfit
+        st_map, loads, C = construct_targetC_bestfit(inst,
+                                                     S=args.stations,
+                                                     eps_step=args.target_eps_step)
+    else:
+        order = "rpw" if args.heuristic == "targetC-rpw" else "lpt"
+        print(f"[HEUR] Costruttiva: Target-C ({order})")
+        from salbp.constructive import construct_targetC
+        st_map, loads, C = construct_targetC(inst,
+                                             S=args.stations,
+                                             order=order,
+                                             eps_step=args.target_eps_step)
 
     if not st_map:
         print("[HEUR] Fallita la costruzione con Target-C: aumenta --target-eps-step o S.")
@@ -380,7 +387,7 @@ def main():
 
     ap.add_argument("--heuristic-only", action="store_true",
                     help="Esegui solo euristiche (niente PLI).")
-    ap.add_argument("--heuristic", choices=["targetC-rpw", "targetC-lpt"], default="targetC-rpw",
+    ap.add_argument("--heuristic", choices=["targetC-rpw", "targetC-lpt", "targetC-bestfit"], default="targetC-rpw",
                     help="Costruttiva da usare in heuristic-only.")
     ap.add_argument("--target-eps-step", type=int, default=1,
                     help="Incremento di C nella costruttiva Target-C (default: 1).")
