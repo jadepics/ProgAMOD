@@ -16,7 +16,10 @@ from salbp.instance import Instance
 from salbp.model import SALBPMinMaxModel          # modello "y"
 from salbp.model_prefix import SALBPPrefixModel   # modello "prefix"
 from salbp.metrics import balance_metrics
-from salbp.monitor import ProgressLogger, plot_progress, plot_gap, plot_station_loads
+from salbp.monitor import ( ProgressLogger, plot_progress, plot_gap, plot_station_loads, plot_incumbent_step_hist,
+                            plot_progress_milestones, plot_bestbound_vs_nodes, plot_gap_targets, plot_nodes_over_time,
+                            plot_primal_dual_ribbon,
+                            )
 from salbp.vnd import vnd_search  # VND metaeuristica
 
 
@@ -48,12 +51,18 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                       log=args.log,
                       cb=logger)
 
-    # snapshot finale per grafici
+    # snapshot finale per progress.csv (include best/bound/nodes)
     try:
         if logger is not None:
-            logger.ensure_final_snapshot(model.model, sol.C)
-    except Exception:
-        pass
+            m = model.model
+            try:
+                _bound = float(getattr(m, "ObjBound", None))
+            except Exception:
+                _bound = None
+            ncount = int(getattr(m, "NodeCount", 0))
+            logger.finalize(best=sol.C, bound=_bound, nodes=ncount)
+    except Exception as _e_fin:
+        print(f"[WARN] finalize logger: {_e_fin}")
 
     # --- 1-MOVE le, PRIMA dei salvataggi) ---
     try:
@@ -227,6 +236,71 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
             gap  = [s.gap   for s in logger.snaps]
             plot_progress(ts, best, bnd, str(outdir / "progress_incumbent_bound.png"))
             plot_gap(ts, gap, str(outdir / "progress_gap.png"))
+
+        # A1 - Istogramma degli step di miglioramento dell'incumbent
+        try:
+            plot_incumbent_step_hist(str(outdir / "progress.csv"),
+                                     str(outdir / "A1_incumbent_step_hist.png"),
+                                     title=f"{Path(args.tasks).name} [{tag}]")
+        except Exception as _eA1:
+            print(f"[WARN] A1 histogram non salvato: {_eA1}")
+
+        # A2 - Milestones sul progresso (richiede LB)
+        try:
+            import math as _math
+            lb = _math.ceil(sum(inst.times.values()) / args.stations)
+            plot_progress_milestones(str(outdir / "progress.csv"),
+                                     str(outdir / "A2_progress_milestones.png"),
+                                     lb=lb,
+                                     title=f"{Path(args.tasks).name} [{tag}]")
+        except Exception as _eA2:
+            print(f"[WARN] A2 milestones non salvato: {_eA2}")
+
+        # B6 - Best bound vs Nodi (staircase)
+        try:
+            plot_bestbound_vs_nodes(
+                str(outdir / "progress.csv"),
+                str(outdir / "B6_bestbound_vs_nodes.png"),
+                title=f"{Path(args.tasks).name} [{tag}]"
+            )
+        except Exception as _eB6:
+            print(f"[WARN] B6 bestbound-vs-nodes non salvato: {_eB6}")
+
+        # C8 - Gap vs tempo con soglie (10,5,1,0.5%)
+        try:
+            plot_gap_targets(
+                str(outdir / "progress.csv"),
+                str(outdir / "C8_gap_targets.png"),
+                targets=(10.0, 5.0, 1.0, 0.5),
+                title=f"{Path(args.tasks).name} [{tag}]"
+            )
+        except Exception as _eC8:
+            print(f"[WARN] C8 gap-targets non salvato: {_eC8}")
+
+        # D10 - Nodi esplorati nel tempo con marker sui miglioramenti incumbent
+        try:
+            plot_nodes_over_time(
+                str(outdir / "progress.csv"),
+                str(outdir / "D10_nodes_over_time.png"),
+                title=f"{Path(args.tasks).name} [{tag}]"
+            )
+        except Exception as _eD10:
+            print(f"[WARN] D10 nodes-over-time non salvato: {_eD10}")
+
+        # E14 - Primal–Dual ribbon (area tra incumbent e bound)
+        try:
+            plot_primal_dual_ribbon(
+                str(outdir / "progress.csv"),
+                str(outdir / "E14_primal_dual_ribbon.png"),
+                title=f"{Path(args.tasks).name} [{tag}]"
+            )
+        except Exception as _eE14:
+            print(f"[WARN] E14 primal-dual ribbon non salvato: {_eE14}")
+
+
+
+
+
     except Exception as e:
         print(f"[WARN] grafici progresso non salvati: {e}")
 
