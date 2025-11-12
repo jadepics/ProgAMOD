@@ -20,6 +20,7 @@ from salbp.monitor import ( ProgressLogger, plot_progress, plot_gap, plot_statio
                             plot_progress_milestones, plot_bestbound_vs_nodes, plot_gap_targets, plot_nodes_over_time,
                             plot_primal_dual_ribbon,
                             )
+from salbp.plots_heuristic import plot_h0_progress, plot_h3_move_contrib
 from salbp.vnd import vnd_search  # VND metaeuristica
 
 
@@ -135,6 +136,42 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                     # plot_ls_c(ls.trace, ls_dir / "ls_C_over_time.png", by="time")
                     # plot_ls_metric(ls.trace, ls_dir / "ls_range_over_time.png", metric="range", by="time")
                     # plot_ls_metric(ls.trace, ls_dir / "ls_var_over_time.png", metric="var", by="time")
+
+                    # H3: contributo mosse (qui tutta la trace è "1move")
+                    try:
+                        trace_csv = str(ls_dir / "ls_trace.csv")
+
+                        # Se la 1-move non ha fatto mosse, costruiamo un CSV "degenerato"
+                        moves_present = False
+                        try:
+                            import csv
+                            with open(trace_csv, "r", encoding="utf-8") as f:
+                                rd = csv.DictReader(f)
+                                for r in rd:
+                                    if (r.get("phase") == "1move"):
+                                        moves_present = True
+                                        break
+                        except Exception:
+                            pass
+
+                        trace_for_h3 = trace_csv
+                        if not moves_present:
+                            dummy = ls_dir / "ls_trace_dummy_for_H3.csv"
+                            with open(dummy, "w", newline="", encoding="utf-8") as f:
+                                f.write("step,t,C,dC,phase,move,range,var\n")
+                                f.write("0,0,0,0,1move,,0,0\n")
+                            trace_for_h3 = str(dummy)
+
+                        plot_h3_move_contrib(trace_for_h3, str(ls_dir / "H3_contrib_C.png"),
+                                             metric="C", title="Contributo mosse – 1-move (C)")
+                        plot_h3_move_contrib(trace_for_h3, str(ls_dir / "H3_contrib_range.png"),
+                                             metric="range", title="Contributo mosse – 1-move (range)")
+                        plot_h3_move_contrib(trace_for_h3, str(ls_dir / "H3_contrib_var.png"),
+                                             metric="var", title="Contributo mosse – 1-move (var)")
+                    except Exception as _eH3ls:
+                        print(f"[LS 1-move] H3 non salvato: {_eH3ls}")
+
+
             except Exception as _eplot:
                 print(f"[LS 1-move:{tag}] report LS non salvato: {_eplot}")
 
@@ -170,7 +207,9 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                              accept_equal=bool(getattr(args, "vnd_accept_equal", False)),
                              tie_metric=str(getattr(args, "vnd_tie", "range")),
                              use_swap=True,
-                             use_ejection=True)
+                             use_ejection=True,
+                             record=True)
+
             if vnd.C < sol.C:
                 print(f"[VND:{tag}] miglioramento: C {sol.C} -> {vnd.C} (iters={vnd.iters}, "
                       f"1m={vnd.moves_1move}, sw={vnd.moves_swap}, ej={vnd.moves_eject})")
@@ -184,6 +223,63 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                 )
             else:
                 print(f"[VND:{tag}] nessun miglioramento (C = {sol.C})")
+
+            # --- VND: salva trace + H0 (progress) + H3 ---
+            try:
+                if getattr(vnd, "trace", None):
+                    vnd_dir = outdir / "post" / "vnd"
+                    vnd_dir.mkdir(parents=True, exist_ok=True)
+
+                    # salva CSV (pandas se disponibile, altrimenti csv stdlib)
+                    try:
+                        import pandas as _pd
+                        _pd.DataFrame(vnd.trace).to_csv(vnd_dir / "vnd_trace.csv", index=False)
+                    except Exception:
+                        import csv
+                        with open(vnd_dir / "vnd_trace.csv", "w", newline="", encoding="utf-8") as f:
+                            w = csv.DictWriter(f, fieldnames=["step", "t", "C", "dC", "phase", "move", "range", "var"])
+                            w.writeheader()
+                            for r in vnd.trace:
+                                w.writerow(r)
+
+                    trace_csv = vnd_dir / "vnd_trace.csv"
+
+                    # H0
+                    plot_h0_progress(str(trace_csv), str(vnd_dir / "H0_progress_C_vs_step.png"),
+                                     by="step", title=f"VND progress (step) – {Path(args.tasks).name} [{tag}]")
+                    plot_h0_progress(str(trace_csv), str(vnd_dir / "H0_progress_C_vs_time.png"),
+                                     by="time", title=f"VND progress (time) – {Path(args.tasks).name} [{tag}]")
+
+                    # H3: se non ci sono mosse (solo 'init'), crea un CSV dummy per barre a zero
+                    moves_present = any(
+                        str(r.get("phase")) in ("1move", "swap", "eject")
+                        for r in (vnd.trace or [])
+                    )
+                    trace_for_h3 = str(trace_csv)
+                    if not moves_present:
+                        dummy = vnd_dir / "vnd_trace_dummy_for_H3.csv"
+                        with open(dummy, "w", newline="", encoding="utf-8") as f:
+                            f.write("step,t,C,dC,phase,move,range,var\n")
+                            for ph in ("1move", "swap", "eject"):
+                                f.write(f"0,0,0,0,{ph},,0,0\n")
+                        trace_for_h3 = str(dummy)
+
+                    # H3
+                    try:
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_C.png"), metric="C",
+                                             title=f"Contributo mosse – VND (C) – {Path(args.tasks).name} [{tag}]")
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_range.png"), metric="range",
+                                             title=f"Contributo mosse – VND (range) – {Path(args.tasks).name} [{tag}]")
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_var.png"), metric="var",
+                                             title=f"Contributo mosse – VND (var) – {Path(args.tasks).name} [{tag}]")
+                    except Exception as _eH3v:
+                        print(f"[VND:{tag}] H3 non salvato: {_eH3v}")
+            except Exception as _eVNDplot:
+                print(f"[VND:{tag}] H0/H3 non salvati: {_eVNDplot}")
+
+
+
+
     except Exception as e:
         print(f"[VND:{tag}] SKIP per errore: {e}")
 
@@ -319,6 +415,17 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
 
     return sol, logger
 
+
+# -- helper per leggere campi dalla trace (dict o oggetto) --
+def _field(row, name, default=None):
+    try:
+        if isinstance(row, dict):
+            return row.get(name, default)
+        return getattr(row, name, default)
+    except Exception:
+        return default
+
+
 def solve_heuristic_only(inst, args, outdir: Path):
     from salbp.constructive import construct_targetC
     outdir.mkdir(parents=True, exist_ok=True)
@@ -365,14 +472,55 @@ def solve_heuristic_only(inst, args, outdir: Path):
                 plot_ls_c(ls.trace, ls_dir / "ls_C_over_steps.png", by="step")
                 plot_ls_metric(ls.trace, ls_dir / "ls_range_over_steps.png", metric="range", by="step")
                 plot_ls_metric(ls.trace, ls_dir / "ls_var_over_steps.png", metric="var", by="step")
+
+                # === H3: contributo mosse (1-move) ===
+                try:
+                    import csv
+                    trace_csv = str(ls_dir / "ls_trace.csv")
+
+                    # Se la trace non contiene '1move', crea un CSV "degenerato" per barre a zero
+                    moves_present = False
+                    try:
+                        with open(trace_csv, "r", encoding="utf-8") as f:
+                            for r in csv.DictReader(f):
+                                if str(r.get("phase")) == "1move":
+                                    moves_present = True
+                                    break
+                    except Exception:
+                        pass
+
+                    trace_for_h3 = trace_csv
+                    if not moves_present:
+                        dummy = ls_dir / "ls_trace_dummy_for_H3.csv"
+                        with open(dummy, "w", newline="", encoding="utf-8") as f:
+                            f.write("step,t,C,dC,phase,move,range,var\n")
+                            f.write("0,0,0,0,1move,,0,0\n")
+                        trace_for_h3 = str(dummy)
+
+                    plot_h3_move_contrib(trace_for_h3, str(ls_dir / "H3_contrib_C.png"),
+                                         metric="C", title="Contributo mosse – 1-move (C)")
+                    plot_h3_move_contrib(trace_for_h3, str(ls_dir / "H3_contrib_range.png"),
+                                         metric="range", title="Contributo mosse – 1-move (range)")
+                    plot_h3_move_contrib(trace_for_h3, str(ls_dir / "H3_contrib_var.png"),
+                                         metric="var", title="Contributo mosse – 1-move (var)")
+                except Exception as _eH3ls:
+                    print(f"[HEUR/1-move] H3 non salvato: {_eH3ls}")
+
         except Exception as _eplot:
             print(f"[HEUR] report LS non salvato: {_eplot}")
         # --- FINE REPORT 1-MOVE ---
 
         # applica il miglioramento se C è sceso (o tieni la soluzione costruttiva)
-        if ls.C < C or (ls.C == C and sum(ls.loads) == sum(loads)):
+        assignment_changed = (st_map != ls.station_of)
+        if ls.C < C:
             st_map, loads, C = ls.station_of, ls.loads, ls.C
-            print(f"[HEUR] 1-move done. C = {C}")
+            print(f"[HEUR] 1-move: miglioramento C -> {C}")
+        elif assignment_changed:
+            # mosse fatte ma C invariato: accettiamo l’assegnamento migliore sul tie-break
+            st_map, loads, C = ls.station_of, ls.loads, ls.C
+            print(f"[HEUR] 1-move: C invariato ({C}), assegnamento cambiato (tie-break migliore)")
+        else:
+            print(f"[HEUR] 1-move: nessuna mossa possibile (ottimo locale, C={C})")
 
     # 👉👉👉 VND FUORI dall'if precedente, così funziona anche senza --post-1move
     if getattr(args, "post_vnd", False):
@@ -385,12 +533,92 @@ def solve_heuristic_only(inst, args, outdir: Path):
                              accept_equal=bool(getattr(args, "vnd_accept_equal", False)),
                              tie_metric=str(getattr(args, "vnd_tie", "range")),
                              use_swap=True,
-                             use_ejection=True)
+                             use_ejection=True,
+                             record=True)
             if vnd.C < C:
                 st_map, loads, C = vnd.station_of, vnd.loads, vnd.C
                 print(f"[HEUR] VND done. C = {C} (iters={vnd.iters}, 1m={vnd.moves_1move}, sw={vnd.moves_swap}, ej={vnd.moves_eject})")
             else:
                 print("[HEUR] VND nessun miglioramento")
+
+            # --- Report VND: trace + H0 + H3 (anche se “vuoto”) ---
+            try:
+                if getattr(vnd, "trace", None):
+                    vnd_dir = outdir / "vnd"
+                    vnd_dir.mkdir(parents=True, exist_ok=True)
+
+                    # salva CSV trace (pandas se c'è, altrimenti csv stdlib)
+                    try:
+                        import pandas as _pd
+                        _pd.DataFrame(vnd.trace).to_csv(vnd_dir / "vnd_trace.csv", index=False)
+                    except Exception:
+                        import csv
+                        with open(vnd_dir / "vnd_trace.csv", "w", newline="", encoding="utf-8") as f:
+                            w = csv.DictWriter(f, fieldnames=["step", "t", "C", "dC", "phase", "move", "range", "var"])
+                            w.writeheader()
+                            for r in vnd.trace:
+                                w.writerow(r)
+
+                    trace_csv = vnd_dir / "vnd_trace.csv"
+
+                    # H0 (NO 'tag' qui)
+                    plot_h0_progress(str(trace_csv), str(vnd_dir / "H0_progress_C_vs_step.png"), by="step")
+                    plot_h0_progress(str(trace_csv), str(vnd_dir / "H0_progress_C_vs_time.png"), by="time")
+
+                    # === H3: contributo per tipo di mossa (1move / swap / eject) ===
+                    try:
+                        moves_present = any(
+                            str(r.get("phase")) in ("1move", "swap", "eject")
+                            for r in (vnd.trace or [])
+                        )
+                        trace_for_h3 = str(trace_csv)
+                        if not moves_present:
+                            dummy = vnd_dir / "vnd_trace_dummy_for_H3.csv"
+                            with open(dummy, "w", newline="", encoding="utf-8") as f:
+                                f.write("step,t,C,dC,phase,move,range,var\n")
+                                for ph in ("1move", "swap", "eject"):
+                                    f.write(f"0,0,0,0,{ph},,0,0\n")
+                            trace_for_h3 = str(dummy)
+
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_C.png"),
+                                             metric="C", title="Contributo mosse – VND (C)")
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_range.png"),
+                                             metric="range", title="Contributo mosse – VND (range)")
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_var.png"),
+                                             metric="var", title="Contributo mosse – VND (var)")
+                    except Exception as _eH3v:
+                        print(f"[HEUR/VND] H3 non salvato: {_eH3v}")
+
+
+                    # --- H3: se non ci sono mosse, crea un CSV "degenerato" per plottare barre=0
+                    moves_present = any(
+                        str(r.get("phase")) in ("1move", "swap", "eject")
+                        for r in (vnd.trace or [])
+                    )
+                    trace_for_h3 = str(trace_csv)
+                    if not moves_present:
+                        dummy = vnd_dir / "vnd_trace_dummy_for_H3.csv"
+                        with open(dummy, "w", newline="", encoding="utf-8") as f:
+                            f.write("step,t,C,dC,phase,move,range,var\n")
+                            for ph in ("1move", "swap", "eject"):
+                                f.write(f"0,0,0,0,{ph},,0,0\n")
+                        trace_for_h3 = str(dummy)
+
+                    # H3: contributo per tipo di mossa (1move / swap / eject)
+                    try:
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_C.png"), metric="C",
+                                             title="Contributo mosse – VND (C)")
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_range.png"), metric="range",
+                                             title="Contributo mosse – VND (range)")
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_var.png"), metric="var",
+                                             title="Contributo mosse – VND (var)")
+                    except Exception as _eH3v:
+                        print(f"[HEUR/VND] H3 non salvato: {_eH3v}")
+            except Exception as _eV:
+                print(f"[HEUR] plot VND (H0/H3) non salvati: {_eV}")
+
+
+
         except Exception as e:
             print(f"[HEUR] VND SKIP per errore: {e}")
 

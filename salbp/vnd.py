@@ -5,6 +5,16 @@ from time import monotonic
 from typing import Dict, List, Tuple, Optional, Set, Any
 
 from salbp.ls_one_move import one_move_local_search  # riuso della tua 1-move
+import time
+
+def _range_var(loads: list[float]) -> tuple[float, float]:
+    if not loads:
+        return 0.0, 0.0
+    r = max(loads) - min(loads)
+    m = sum(loads) / len(loads)
+    v = sum((x - m) * (x - m) for x in loads) / len(loads)
+    return r, v
+
 
 # ---------- strutture risultato ----------
 @dataclass
@@ -16,6 +26,7 @@ class VNDResult:
     moves_1move: int
     moves_swap: int
     moves_eject: int
+    trace: list | None = None
 
 # ---------- util comuni (copiati, così non tocchiamo ls_one_move) ----------
 def _succs_from_preds(tasks: List[Any], preds: Dict[Any, List[Any]]) -> Dict[Any, Set[Any]]:
@@ -143,7 +154,8 @@ def vnd_search(instance,
                accept_equal: bool = False,
                tie_metric: str = "range",
                use_swap: bool = True,
-               use_ejection: bool = True) -> VNDResult:
+               use_ejection: bool = True,
+               record: bool = False) -> VNDResult:
     """
     VND: 1-move finché migliora -> se bloccato prova swap -> se ancora bloccato prova ejection (cap C-1).
     Appena trovi un miglioramento con un attrezzo, riparti da 1-move.
@@ -160,6 +172,32 @@ def vnd_search(instance,
     iters = 0
     m1 = ms = me = 0  # contatori mosse
 
+    t0 = time.perf_counter()
+    trace = [] if record else None
+    step_idx = 0
+
+    def _emit(phase: str, move: str, oldC: int, C: int, loads: list[float]):
+        """Registra una riga trace (solo se record=True)."""
+        if trace is None:
+            return
+        t = time.perf_counter() - t0
+        rng, var = _range_var(loads)
+        trace.append({
+            "step": step_idx,  # indice “miglioramento”
+            "t": round(t, 9),  # secondi
+            "C": int(C),
+            "dC": int(oldC - C),
+            "phase": phase,  # "1move" | "swap" | "eject" | "init"
+            "move": move,  # descrizione breve, opzionale
+            "range": float(rng),
+            "var": float(var),
+        })
+
+    # snapshot iniziale (C corrente)
+    if record:
+        # supponiamo che qui tu abbia già definito C e loads attuali
+        _emit("init", "", C, C, loads)
+
     while True:
         if time_limit is not None and (monotonic() - start) >= time_limit:
             break
@@ -173,36 +211,41 @@ def vnd_search(instance,
         ls = one_move_local_search(instance,
                                    S=S,
                                    station_of=st,
-                                   time_limit=t_left * 0.5 if t_left is not None else 1.0,  # metà del tempo residuo
+                                   time_limit=t_left * 0.5 if t_left is not None else 1.0,
                                    accept_equal=accept_equal,
                                    tie_metric=tie_metric,
                                    cap_C=None,
                                    record=False)
         if ls.C < C:
-            # aggiornati
+            oldC = C
             st, loads, C = ls.station_of, ls.loads, ls.C
             improved_any = True
-            # contatore: approssimiamo n° mosse come differenza di carico/tempo non tracciata: non disponibile -> +1
             m1 += 1
-            # se migliorato, ricomincia dal primo vicinato
+            if record:
+                step_idx += 1
+                _emit("1move", "descent", oldC, C, loads)
             continue
 
         # --- N2: SWAP (se abilitato) ---
         if use_swap:
-            ES, LS = _compute_ES_LS(st, preds, succs, S)
+            #ES, LS = _compute_ES_LS(st, preds, succs, S)
             sw = _try_swap_first_improving(tasks, times, preds, succs, S, st, loads, C,
                                            accept_equal=accept_equal, tie_metric=tie_metric)
             if sw is not None:
                 i, j = sw
-                s = st[i]; r = st[j]
+                s = st[i];
+                r = st[j]
+                oldC = C
                 # applica swap
-                loads[s-1] = loads[s-1] - times[i] + times[j]
-                loads[r-1] = loads[r-1] - times[j] + times[i]
+                loads[s - 1] = loads[s - 1] - times[i] + times[j]
+                loads[r - 1] = loads[r - 1] - times[j] + times[i]
                 st[i], st[j] = r, s
                 C = max(loads)
                 improved_any = True
                 ms += 1
-                # dopo uno swap riuscito, torna a N1
+                if record:
+                    step_idx += 1
+                    _emit("swap", f"{i}<->{j}", oldC, C, loads)
                 continue
 
         # --- N3: EJECTION via cap (se abilitato) ---
@@ -214,14 +257,17 @@ def vnd_search(instance,
                                           time_slice=t_left * 0.5 if t_left is not None else 1.0,
                                           tie_metric=tie_metric)
             if trial is not None:
+                oldC = C
                 st, loads, C = trial
                 improved_any = True
                 me += 1
-                # dopo ejection riuscita, torna a N1
+                if record:
+                    step_idx += 1
+                    _emit("eject", f"cap->{oldC - 1}", oldC, C, loads)
                 continue
 
         if not improved_any:
             break
 
     return VNDResult(station_of=st, loads=loads, C=C, iters=iters,
-                     moves_1move=m1, moves_swap=ms, moves_eject=me)
+                     moves_1move=m1, moves_swap=ms, moves_eject=me, trace=trace)
