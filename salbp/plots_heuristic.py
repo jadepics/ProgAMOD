@@ -308,3 +308,127 @@ def plot_h4_timeline(csv_path: str,
     _plt.tight_layout()
     _plt.savefig(out_png, dpi=150)
     _plt.close()
+
+# AFTER — salbp/plots_heuristic.py
+
+def plot_h6_delta_scatter(trace_csv: str,
+                          out_png: str,
+                          metric: str = "range",   # oppure "var"
+                          title: str | None = None,
+                          min_abs_dC: float = 0.0):
+    """
+    H6 – Scatter ΔC vs Δ(metric) per tipo di mossa (1move/swap/eject).
+    Legge la trace CSV con colonne: step,t,C,dC,phase,move,range,var
+    Calcola le differenze successive (ordinando per 'step' se presente, altrimenti in ordine di lettura).
+
+    :param trace_csv: path CSV trace (vnd_trace.csv o ls_trace.csv)
+    :param out_png:   path file PNG di output
+    :param metric:    "range" oppure "var"
+    :param title:     titolo del grafico
+    :param min_abs_dC: filtra punti con |ΔC| < soglia (default 0: nessun filtro)
+    """
+    import csv
+    import math
+    import matplotlib.pyplot as plt
+
+    if metric not in ("range", "var"):
+        raise ValueError("metric deve essere 'range' oppure 'var'.")
+
+    rows = []
+    with open(trace_csv, "r", encoding="utf-8") as f:
+        rd = csv.DictReader(f)
+        for r in rd:
+            try:
+                step = int(r.get("step", len(rows)))
+            except Exception:
+                step = len(rows)
+            try:
+                t = float(r.get("t", step))
+            except Exception:
+                t = float(step)
+            try:
+                C = float(r.get("C"))
+            except Exception:
+                continue  # senza C non ha senso
+            try:
+                mval = float(r.get(metric))
+            except Exception:
+                # se manca la colonna metric, non possiamo plottare
+                return
+            phase = str(r.get("phase", "")).strip() or "unknown"
+            rows.append({"step": step, "t": t, "C": C, "metric": mval, "phase": phase})
+
+    if not rows:
+        # nessun dato: crea un placeholder "no data"
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.text(0.5, 0.5, "H6: no data", ha="center", va="center", transform=ax.transAxes)
+        ax.axis("off")
+        fig.savefig(out_png, bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    # ordina per step se presente
+    rows.sort(key=lambda r: r["step"])
+
+    # costruisci ΔC e Δmetric fra righe successive
+    deltas = []
+    prev = rows[0]
+    for cur in rows[1:]:
+        dC = cur["C"] - prev["C"]
+        dM = cur["metric"] - prev["metric"]
+        phase = cur["phase"]
+        deltas.append({"dC": dC, "dM": dM, "phase": phase})
+        prev = cur
+
+    # filtra opzionalmente piccoli ΔC (rumore)
+    if min_abs_dC > 0.0:
+        deltas = [d for d in deltas if abs(d["dC"]) >= min_abs_dC]
+
+    # se non c'è nulla di plottabile, crea un placeholder
+    if not deltas:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.text(0.5, 0.5, "H6: no deltas", ha="center", va="center", transform=ax.transAxes)
+        ax.axis("off")
+        fig.savefig(out_png, bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    # raggruppa per phase
+    by_phase = {}
+    for d in deltas:
+        by_phase.setdefault(d["phase"], []).append(d)
+
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+
+    # disegna assi zero
+    ax.axhline(0, linewidth=1, alpha=0.6)
+    ax.axvline(0, linewidth=1, alpha=0.6)
+
+    # scatter per ciascuna phase
+    handles = []
+    labels = []
+    for phase, pts in by_phase.items():
+        xs = [p["dM"] for p in pts]
+        ys = [p["dC"] for p in pts]
+        sc = ax.scatter(xs, ys, alpha=0.75, label=f"{phase} (n={len(pts)})", s=24)
+        handles.append(sc)
+        labels.append(f"{phase} (n={len(pts)})")
+
+    # label assi
+    ax.set_xlabel(f"Δ{metric}")
+    ax.set_ylabel("ΔC")
+    ax.grid(True, alpha=0.25)
+
+    # titolo
+    if not title:
+        title = f"H6 – ΔC vs Δ{metric}"
+    ax.set_title(title)
+
+    # legenda
+    if handles:
+        ax.legend(handles=handles, labels=labels, loc="best", frameon=True)
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)

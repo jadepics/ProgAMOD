@@ -20,7 +20,13 @@ from salbp.monitor import ( ProgressLogger, plot_progress, plot_gap, plot_statio
                             plot_progress_milestones, plot_bestbound_vs_nodes, plot_gap_targets, plot_nodes_over_time,
                             plot_primal_dual_ribbon,
                             )
-from salbp.plots_heuristic import plot_h0_progress, plot_h3_move_contrib, plot_h4_timeline
+from salbp.plots_heuristic import (
+    plot_h0_progress,
+    plot_h3_move_contrib,
+    plot_h4_timeline,
+    plot_h6_delta_scatter,
+)
+
 from salbp.vnd import vnd_search  # VND metaeuristica
 
 
@@ -182,6 +188,18 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                     except Exception as _eH4ls:
                         print(f"[LS 1-move:{tag}] H4 non salvato: {_eH4ls}")
 
+                    # H6: ΔC vs Δrange / Δvar (scatter per tipo di mossa)
+                    try:
+                        plot_h6_delta_scatter(trace_for_h3, str(ls_dir / "H6_deltaC_vs_deltaRange.png"),
+                                              metric="range",
+                                              title="H6 – ΔC vs Δrange – 1-move")
+                        plot_h6_delta_scatter(trace_for_h3, str(ls_dir / "H6_deltaC_vs_deltaVar.png"),
+                                              metric="var",
+                                              title="H6 – ΔC vs Δvar – 1-move")
+                    except Exception as _eH6ls:
+                        print(f"[LS 1-move:{tag}] H6 non salvato: {_eH6ls}")
+
+
             except Exception as _eplot:
                 print(f"[LS 1-move:{tag}] report LS non salvato: {_eplot}")
 
@@ -296,9 +314,22 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                     except Exception as _eH4v:
                         print(f"[VND:{tag}] H4 non salvato: {_eH4v}")
 
+                    # H6: ΔC vs Δrange / Δvar (scatter per tipo di mossa)
+                    try:
+                        plot_h6_delta_scatter(trace_for_h3, str(vnd_dir / "H6_deltaC_vs_deltaRange.png"),
+                                              metric="range",
+                                              title=f"H6 – ΔC vs Δrange – VND – {Path(args.tasks).name} [{tag}]")
+                        plot_h6_delta_scatter(trace_for_h3, str(vnd_dir / "H6_deltaC_vs_deltaVar.png"),
+                                              metric="var",
+                                              title=f"H6 – ΔC vs Δvar – VND – {Path(args.tasks).name} [{tag}]")
+                    except Exception as _eH6v:
+                        print(f"[VND:{tag}] H6 non salvato: {_eH6v}")
+
+
 
             except Exception as _eVNDplot:
-                print(f"[VND:{tag}] H0/H3 non salvati: {_eVNDplot}")
+                print(f"[VND:{tag}] H0/H3/H4/H6 non salvati: {_eVNDplot}")
+
 
 
 
@@ -540,6 +571,16 @@ def solve_heuristic_only(inst, args, outdir: Path):
                 except Exception as _eH4ls:
                     print(f"[HEUR/1-move] H4 non salvato: {_eH4ls}")
 
+                # H6: ΔC vs Δrange / Δvar (scatter per tipo di mossa)
+                try:
+                    plot_h6_delta_scatter(trace_for_h3, str(ls_dir / "H6_deltaC_vs_deltaRange.png"),
+                                          metric="range",
+                                          title="H6 – ΔC vs Δrange – 1-move")
+                    plot_h6_delta_scatter(trace_for_h3, str(ls_dir / "H6_deltaC_vs_deltaVar.png"),
+                                          metric="var",
+                                          title="H6 – ΔC vs Δvar – 1-move")
+                except Exception as _eH6ls:
+                    print(f"[HEUR/1-move] H6 non salvato: {_eH6ls}")
 
         except Exception as _eplot:
             print(f"[HEUR] report LS non salvato: {_eplot}")
@@ -637,6 +678,17 @@ def solve_heuristic_only(inst, args, outdir: Path):
                                          title="H4 – Timeline (C vs time) – VND")
                     except Exception as _eH4v:
                         print(f"[HEUR/VND] H4 non salvato: {_eH4v}")
+
+                    # H6: ΔC vs Δrange / Δvar (scatter per tipo di mossa)
+                    try:
+                        plot_h6_delta_scatter(trace_for_h3, str(vnd_dir / "H6_deltaC_vs_deltaRange.png"),
+                                              metric="range",
+                                              title="H6 – ΔC vs Δrange – VND")
+                        plot_h6_delta_scatter(trace_for_h3, str(vnd_dir / "H6_deltaC_vs_deltaVar.png"),
+                                              metric="var",
+                                              title="H6 – ΔC vs Δvar – VND")
+                    except Exception as _eH6v:
+                        print(f"[HEUR/VND] H6 non salvato: {_eH6v}")
 
             except Exception as _eV:
                 print(f"[HEUR] plot VND (H0/H3/H4) non salvati: {_eV}")
