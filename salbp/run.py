@@ -20,7 +20,7 @@ from salbp.monitor import ( ProgressLogger, plot_progress, plot_gap, plot_statio
                             plot_progress_milestones, plot_bestbound_vs_nodes, plot_gap_targets, plot_nodes_over_time,
                             plot_primal_dual_ribbon,
                             )
-from salbp.plots_heuristic import plot_h0_progress, plot_h3_move_contrib
+from salbp.plots_heuristic import plot_h0_progress, plot_h3_move_contrib, plot_h4_timeline
 from salbp.vnd import vnd_search  # VND metaeuristica
 
 
@@ -171,6 +171,16 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                     except Exception as _eH3ls:
                         print(f"[LS 1-move] H3 non salvato: {_eH3ls}")
 
+                    # H4: timeline mosse + metrica (C vs step/time)
+                    try:
+                        plot_h4_timeline(trace_for_h3, str(ls_dir / "H4_timeline_C_vs_step.png"),
+                                         metric="C", by="step",
+                                         title="H4 – Timeline (C vs step) – 1-move")
+                        plot_h4_timeline(trace_for_h3, str(ls_dir / "H4_timeline_C_vs_time.png"),
+                                         metric="C", by="time",
+                                         title="H4 – Timeline (C vs time) – 1-move")
+                    except Exception as _eH4ls:
+                        print(f"[LS 1-move:{tag}] H4 non salvato: {_eH4ls}")
 
             except Exception as _eplot:
                 print(f"[LS 1-move:{tag}] report LS non salvato: {_eplot}")
@@ -252,7 +262,7 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
 
                     # H3: se non ci sono mosse (solo 'init'), crea un CSV dummy per barre a zero
                     moves_present = any(
-                        str(r.get("phase")) in ("1move", "swap", "eject")
+                        str(_field(r, "phase", "")) in ("1move", "swap", "eject")
                         for r in (vnd.trace or [])
                     )
                     trace_for_h3 = str(trace_csv)
@@ -274,6 +284,19 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                                              title=f"Contributo mosse – VND (var) – {Path(args.tasks).name} [{tag}]")
                     except Exception as _eH3v:
                         print(f"[VND:{tag}] H3 non salvato: {_eH3v}")
+
+                    # H4: timeline mosse + metrica (C vs step/time)
+                    try:
+                        plot_h4_timeline(trace_for_h3, str(vnd_dir / "H4_timeline_C_vs_step.png"),
+                                         metric="C", by="step",
+                                         title=f"H4 – Timeline (C vs step) – VND – {Path(args.tasks).name} [{tag}]")
+                        plot_h4_timeline(trace_for_h3, str(vnd_dir / "H4_timeline_C_vs_time.png"),
+                                         metric="C", by="time",
+                                         title=f"H4 – Timeline (C vs time) – VND – {Path(args.tasks).name} [{tag}]")
+                    except Exception as _eH4v:
+                        print(f"[VND:{tag}] H4 non salvato: {_eH4v}")
+
+
             except Exception as _eVNDplot:
                 print(f"[VND:{tag}] H0/H3 non salvati: {_eVNDplot}")
 
@@ -506,6 +529,18 @@ def solve_heuristic_only(inst, args, outdir: Path):
                 except Exception as _eH3ls:
                     print(f"[HEUR/1-move] H3 non salvato: {_eH3ls}")
 
+                # H4: timeline (heuristic-only, 1-move)
+                try:
+                    plot_h4_timeline(trace_for_h3, str(ls_dir / "H4_timeline_C_vs_step.png"),
+                                     metric="C", by="step",
+                                     title="H4 – Timeline (C vs step) – 1-move")
+                    plot_h4_timeline(trace_for_h3, str(ls_dir / "H4_timeline_C_vs_time.png"),
+                                     metric="C", by="time",
+                                     title="H4 – Timeline (C vs time) – 1-move")
+                except Exception as _eH4ls:
+                    print(f"[HEUR/1-move] H4 non salvato: {_eH4ls}")
+
+
         except Exception as _eplot:
             print(f"[HEUR] report LS non salvato: {_eplot}")
         # --- FINE REPORT 1-MOVE ---
@@ -541,7 +576,7 @@ def solve_heuristic_only(inst, args, outdir: Path):
             else:
                 print("[HEUR] VND nessun miglioramento")
 
-            # --- Report VND: trace + H0 + H3 (anche se “vuoto”) ---
+            # --- Report VND: trace + H0 + H3 + H4 ---
             try:
                 if getattr(vnd, "trace", None):
                     vnd_dir = outdir / "vnd"
@@ -561,38 +596,15 @@ def solve_heuristic_only(inst, args, outdir: Path):
 
                     trace_csv = vnd_dir / "vnd_trace.csv"
 
-                    # H0 (NO 'tag' qui)
-                    plot_h0_progress(str(trace_csv), str(vnd_dir / "H0_progress_C_vs_step.png"), by="step")
-                    plot_h0_progress(str(trace_csv), str(vnd_dir / "H0_progress_C_vs_time.png"), by="time")
+                    # H0
+                    plot_h0_progress(str(trace_csv), str(vnd_dir / "H0_progress_C_vs_step.png"),
+                                     by="step")
+                    plot_h0_progress(str(trace_csv), str(vnd_dir / "H0_progress_C_vs_time.png"),
+                                     by="time")
 
-                    # === H3: contributo per tipo di mossa (1move / swap / eject) ===
-                    try:
-                        moves_present = any(
-                            str(r.get("phase")) in ("1move", "swap", "eject")
-                            for r in (vnd.trace or [])
-                        )
-                        trace_for_h3 = str(trace_csv)
-                        if not moves_present:
-                            dummy = vnd_dir / "vnd_trace_dummy_for_H3.csv"
-                            with open(dummy, "w", newline="", encoding="utf-8") as f:
-                                f.write("step,t,C,dC,phase,move,range,var\n")
-                                for ph in ("1move", "swap", "eject"):
-                                    f.write(f"0,0,0,0,{ph},,0,0\n")
-                            trace_for_h3 = str(dummy)
-
-                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_C.png"),
-                                             metric="C", title="Contributo mosse – VND (C)")
-                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_range.png"),
-                                             metric="range", title="Contributo mosse – VND (range)")
-                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_var.png"),
-                                             metric="var", title="Contributo mosse – VND (var)")
-                    except Exception as _eH3v:
-                        print(f"[HEUR/VND] H3 non salvato: {_eH3v}")
-
-
-                    # --- H3: se non ci sono mosse, crea un CSV "degenerato" per plottare barre=0
+                    # H3: se non ci sono mosse, crea un CSV dummy per barre a zero
                     moves_present = any(
-                        str(r.get("phase")) in ("1move", "swap", "eject")
+                        str(_field(r, "phase", "")) in ("1move", "swap", "eject")
                         for r in (vnd.trace or [])
                     )
                     trace_for_h3 = str(trace_csv)
@@ -604,20 +616,30 @@ def solve_heuristic_only(inst, args, outdir: Path):
                                 f.write(f"0,0,0,0,{ph},,0,0\n")
                         trace_for_h3 = str(dummy)
 
-                    # H3: contributo per tipo di mossa (1move / swap / eject)
+                    # H3
                     try:
-                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_C.png"), metric="C",
-                                             title="Contributo mosse – VND (C)")
-                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_range.png"), metric="range",
-                                             title="Contributo mosse – VND (range)")
-                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_var.png"), metric="var",
-                                             title="Contributo mosse – VND (var)")
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_C.png"),
+                                             metric="C", title="Contributo mosse – VND (C)")
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_range.png"),
+                                             metric="range", title="Contributo mosse – VND (range)")
+                        plot_h3_move_contrib(trace_for_h3, str(vnd_dir / "H3_contrib_var.png"),
+                                             metric="var", title="Contributo mosse – VND (var)")
                     except Exception as _eH3v:
                         print(f"[HEUR/VND] H3 non salvato: {_eH3v}")
+
+                    # H4: timeline (heuristic-only, VND)
+                    try:
+                        plot_h4_timeline(trace_for_h3, str(vnd_dir / "H4_timeline_C_vs_step.png"),
+                                         metric="C", by="step",
+                                         title="H4 – Timeline (C vs step) – VND")
+                        plot_h4_timeline(trace_for_h3, str(vnd_dir / "H4_timeline_C_vs_time.png"),
+                                         metric="C", by="time",
+                                         title="H4 – Timeline (C vs time) – VND")
+                    except Exception as _eH4v:
+                        print(f"[HEUR/VND] H4 non salvato: {_eH4v}")
+
             except Exception as _eV:
-                print(f"[HEUR] plot VND (H0/H3) non salvati: {_eV}")
-
-
+                print(f"[HEUR] plot VND (H0/H3/H4) non salvati: {_eV}")
 
         except Exception as e:
             print(f"[HEUR] VND SKIP per errore: {e}")

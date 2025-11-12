@@ -224,3 +224,87 @@ def plot_h3_move_contrib(trace_src, out_png, metric="C", title=None):
     fig.tight_layout()
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
+
+def plot_h4_timeline(csv_path: str,
+                     out_png: str,
+                     metric: str = "C",
+                     by: str = "time",
+                     title: str | None = None) -> None:
+    """
+    H4 – Timeline: linea della metrica scelta (C/range/var) vs step/tempo
+    con marker delle mosse (1move/swap/eject). Funziona sia su trace VND sia su 1-move.
+
+    csv atteso: colonne step,t,C,dC,phase,move,range,var (come vnd_trace.csv o ls_trace.csv)
+    - metric: "C" | "range" | "var"
+    - by: "time" (usa colonna 't') oppure "step" (usa colonna 'step')
+    """
+    import csv as _csv
+    import math as _math
+    import matplotlib.pyplot as _plt
+
+    # 1) leggi CSV (robusto senza pandas)
+    rows = []
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            rd = _csv.DictReader(f)
+            for r in rd:
+                rows.append(r)
+    except Exception as e:
+        print(f"[H4] impossibile leggere {csv_path}: {e}")
+        rows = []
+
+    if not rows:
+        # crea un grafico vuoto "parlante"
+        _plt.figure(figsize=(8, 4.5))
+        _plt.title(title or f"H4 – Timeline (no data)")
+        _plt.text(0.5, 0.5, "Nessuna trace disponibile", ha="center", va="center", transform=_plt.gca().transAxes)
+        _plt.tight_layout()
+        _plt.savefig(out_png, dpi=150)
+        _plt.close()
+        return
+
+    xcol = "t" if by == "time" else "step"
+    # 2) estrai serie
+    def _to_float(x, default=0.0):
+        try:
+            return float(x)
+        except Exception:
+            return default
+
+    X = [_to_float(r.get(xcol, 0.0)) for r in rows]
+    Y = [_to_float(r.get(metric, _math.nan)) for r in rows]
+    phases = [str(r.get("phase", "")) for r in rows]
+    dC = [_to_float(r.get("dC", 0.0)) for r in rows]
+
+    # 3) plot
+    _plt.figure(figsize=(8, 4.5))
+    # linea metrica
+    if len(X) >= 1:
+        _plt.plot(X, Y, linewidth=1.5, label=metric)
+
+    # marker per mosse (niente colori “forzati”: lasciamo default)
+    markers = {"1move": "o", "swap": "s", "eject": "^"}
+    for ph in ("1move", "swap", "eject"):
+        idx = [i for i, p in enumerate(phases) if p == ph]
+        if not idx:
+            continue
+        xs = [X[i] for i in idx]
+        ys = [Y[i] for i in idx]
+        _plt.scatter(xs, ys, marker=markers.get(ph, "o"), s=28, label=ph)
+
+    # evidenzia i punti dove C migliora (se stiamo plottando C)
+    if metric.lower() == "c":
+        imp = [i for i, val in enumerate(dC) if val > 0]
+        if imp:
+            _plt.scatter([X[i] for i in imp], [Y[i] for i in imp],
+                         s=60, facecolors="none", edgecolors="black", linewidths=1.2,
+                         label="improvement (ΔC>0)")
+
+    _plt.xlabel("time (s)" if by == "time" else "step")
+    _plt.ylabel(metric)
+    if title:
+        _plt.title(title)
+    _plt.legend(loc="best")
+    _plt.tight_layout()
+    _plt.savefig(out_png, dpi=150)
+    _plt.close()
