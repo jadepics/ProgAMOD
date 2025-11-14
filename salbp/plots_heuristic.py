@@ -520,3 +520,147 @@ def plot_h8_deltaC_by_phase(csv_path: str,
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
 
+
+def plot_h11_tradeoff(csv_path: str,
+                      out_png: str,
+                      title: str | None = None) -> None:
+    """
+    H11 – Tradeoff Δrange vs Δvar con bolle ∝ miglioramento su C.
+    - x = Δrange (nuovo - vecchio)
+    - y = Δvar   (nuovo - vecchio)
+    - size bolla ∝ miglioramento su C (usa 'dC' se presente, altrimenti -ΔC se ΔC<0, sennò 0)
+    - colore = fase (1move / swap / eject)
+    """
+    import csv
+    import math
+    import matplotlib.pyplot as plt
+
+    # Leggi trace
+    rows = []
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            rd = csv.DictReader(f)
+            for r in rd:
+                rows.append(r)
+    except Exception:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "Impossibile leggere la trace per H11", ha="center", va="center")
+        if title:
+            fig.suptitle(title)
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+        return
+
+    # Normalizza tipi e ordina per 'step' (se manca, usa l'indice di lettura)
+    def _to_float(v, default=float("nan")):
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    enriched = []
+    for idx, r in enumerate(rows):
+        step = r.get("step")
+        try:
+            step = int(step)
+        except Exception:
+            step = idx
+        enriched.append(dict(
+            step=step,
+            t=_to_float(r.get("t")),
+            C=_to_float(r.get("C")),
+            dC=_to_float(r.get("dC"), default=float("nan")),
+            rng=_to_float(r.get("range")),
+            var=_to_float(r.get("var")),
+            phase=(r.get("phase") or "").strip(),
+        ))
+    if not enriched:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "Trace vuota per H11", ha="center", va="center")
+        if title:
+            fig.suptitle(title)
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+        return
+
+    enriched.sort(key=lambda r: r["step"])
+
+    # Calcola Δrange / Δvar e "improvement" su C (magnitudine positiva)
+    # Salta la riga 'init' o la prima (non ha precedente)
+    phases = []
+    for i in range(1, len(enriched)):
+        prev, cur = enriched[i - 1], enriched[i]
+        ph = cur["phase"] or ""
+        if ph == "init":
+            continue
+        d_range = cur["rng"] - prev["rng"] if math.isfinite(cur["rng"]) and math.isfinite(prev["rng"]) else float("nan")
+        d_var   = cur["var"] - prev["var"] if math.isfinite(cur["var"]) and math.isfinite(prev["var"]) else float("nan")
+
+        # miglioramento su C: prima prova con dC (se presente e finito), altrimenti usa -ΔC se ΔC<0
+        imp = cur["dC"]
+        if not math.isfinite(imp):
+            if math.isfinite(cur["C"]) and math.isfinite(prev["C"]):
+                deltaC = cur["C"] - prev["C"]   # <0 se miglioramento
+                imp = max(0.0, -deltaC)
+            else:
+                imp = 0.0
+
+        phases.append((ph, d_range, d_var, imp))
+
+    # Raggruppa per fase
+    data = {}
+    for ph, dx, dy, imp in phases:
+        if not math.isfinite(dx) or not math.isfinite(dy):
+            continue
+        data.setdefault(ph, []).append((dx, dy, imp))
+
+    if not data:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "Nessuna mossa utile per H11", ha="center", va="center")
+        if title:
+            fig.suptitle(title)
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+        return
+
+    # Ordine fasi più rilevanti
+    order = [ph for ph in ("1move", "swap", "eject") if ph in data] + [ph for ph in sorted(data) if ph not in ("1move", "swap", "eject")]
+
+    # Scala dimensione bolle
+    all_imp = [imp for vals in data.values() for (_, _, imp) in vals]
+    max_imp = max(all_imp) if all_imp else 0.0
+
+    def _size(imp):
+        # area in points^2 — range ~ [40, 220]
+        if max_imp <= 0:
+            return 60.0
+        return 40.0 + (imp / max_imp) ** 0.5 * 180.0
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(10.5, 5.2))
+    for ph in order:
+        pts = data[ph]
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        ss = [_size(p[2]) for p in pts]
+        ax.scatter(xs, ys, s=ss, alpha=0.65, label=ph, edgecolors="black", linewidths=0.3)
+
+    ax.axhline(0.0, lw=1, alpha=0.6)
+    ax.axvline(0.0, lw=1, alpha=0.6)
+    ax.set_xlabel("Δrange (nuovo − vecchio)")
+    ax.set_ylabel("Δvar (nuovo − vecchio)")
+    if title:
+        ax.set_title(title)
+
+    # nota su dimensione bolle
+    ax.text(0.99, 0.01, "Area bolla ∝ miglioramento su C", ha="right", va="bottom", transform=ax.transAxes, fontsize=9)
+    ax.legend(title="Fase", loc="best", frameon=True)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)

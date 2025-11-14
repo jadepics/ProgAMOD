@@ -26,6 +26,7 @@ from salbp.plots_heuristic import (
     plot_h4_timeline,
     plot_h6_delta_scatter,
     plot_h8_deltaC_by_phase,
+    plot_h11_tradeoff,
 )
 
 from salbp.vnd import vnd_search  # VND metaeuristica
@@ -207,6 +208,13 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                     except Exception as _eH8ls:
                         print(f"[LS 1-move:{tag}] H8 non salvato: {_eH8ls}")
 
+                    # H11: tradeoff Δrange vs Δvar (bolle ∝ miglioramento C)
+                    try:
+                        plot_h11_tradeoff(trace_for_h3, str(ls_dir / "H11_tradeoff_drange_dvar.png"),
+                                          title="H11 – Δrange vs Δvar (size ∝ ΔC) – 1-move")
+                    except Exception as _eH11ls:
+                        print(f"[LS 1-move:{tag}] H11 non salvato: {_eH11ls}")
+
             except Exception as _eplot:
                 print(f"[LS 1-move:{tag}] report LS non salvato: {_eplot}")
 
@@ -338,6 +346,13 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                                                 title=f"H8 – ΔC per tipo di mossa – VND")
                     except Exception as _eH8v:
                         print(f"[VND:{tag}] H8 non salvato: {_eH8v}")
+
+                    # H11: tradeoff Δrange vs Δvar (bolle ∝ miglioramento C)
+                    try:
+                        plot_h11_tradeoff(trace_for_h3, str(vnd_dir / "H11_tradeoff_drange_dvar.png"),
+                                          title=f"H11 – Δrange vs Δvar (size ∝ ΔC) – VND – {Path(args.tasks).name} [{tag}]")
+                    except Exception as _eH11v:
+                        print(f"[VND:{tag}] H11 non salvato: {_eH11v}")
 
             except Exception as _eVNDplot:
                 print(f"[VND:{tag}] H0/H3/H4/H6/H8 non salvati: {_eVNDplot}")
@@ -597,6 +612,13 @@ def solve_heuristic_only(inst, args, outdir: Path):
                 except Exception as _eH8ls:
                     print(f"[HEUR/1-move] H8 non salvato: {_eH8ls}")
 
+                # H11: tradeoff Δrange vs Δvar (bolle ∝ miglioramento C)
+                try:
+                    plot_h11_tradeoff(trace_for_h3, str(ls_dir / "H11_tradeoff_drange_dvar.png"),
+                                      title="H11 – Δrange vs Δvar (size ∝ ΔC) – 1-move")
+                except Exception as _eH11ls:
+                    print(f"[HEUR/1-move] H11 non salvato: {_eH11ls}")
+
 
         except Exception as _eplot:
             print(f"[HEUR] report LS non salvato: {_eplot}")
@@ -712,6 +734,13 @@ def solve_heuristic_only(inst, args, outdir: Path):
                                                 title="H8 – ΔC per tipo di mossa – VND")
                     except Exception as _eH8v:
                         print(f"[HEUR/VND] H8 non salvato: {_eH8v}")
+
+                    # H11: tradeoff Δrange vs Δvar (bolle ∝ miglioramento C)
+                    try:
+                        plot_h11_tradeoff(trace_for_h3, str(vnd_dir / "H11_tradeoff_drange_dvar.png"),
+                                          title=f"H11 – Δrange vs Δvar (size ∝ ΔC) – VND")
+                    except Exception as _eH11v:
+                        print(f"[HEUR/VND] H11 non salvato: {_eH11v}")
 
             except Exception as _eV:
                 print(f"[HEUR/VND] H0/H3/H4/H6/H8 non salvati: {_eV}")
