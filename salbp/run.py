@@ -25,6 +25,7 @@ from salbp.plots_heuristic import (
     plot_h3_move_contrib,
     plot_h4_timeline,
     plot_h6_delta_scatter,
+    plot_h8_deltaC_by_phase,
 )
 
 from salbp.vnd import vnd_search  # VND metaeuristica
@@ -199,6 +200,12 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                     except Exception as _eH6ls:
                         print(f"[LS 1-move:{tag}] H6 non salvato: {_eH6ls}")
 
+                    # H8: distribuzione ΔC per tipo di mossa (boxplot)
+                    try:
+                        plot_h8_deltaC_by_phase(trace_for_h3, str(ls_dir / "H8_deltaC_by_move.png"),
+                                                title="H8 – ΔC per tipo di mossa – 1-move")
+                    except Exception as _eH8ls:
+                        print(f"[LS 1-move:{tag}] H8 non salvato: {_eH8ls}")
 
             except Exception as _eplot:
                 print(f"[LS 1-move:{tag}] report LS non salvato: {_eplot}")
@@ -325,14 +332,15 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
                     except Exception as _eH6v:
                         print(f"[VND:{tag}] H6 non salvato: {_eH6v}")
 
-
+                    # H8: distribuzione ΔC per tipo di mossa (boxplot)
+                    try:
+                        plot_h8_deltaC_by_phase(trace_for_h3, str(vnd_dir / "H8_deltaC_by_move.png"),
+                                                title=f"H8 – ΔC per tipo di mossa – VND")
+                    except Exception as _eH8v:
+                        print(f"[VND:{tag}] H8 non salvato: {_eH8v}")
 
             except Exception as _eVNDplot:
-                print(f"[VND:{tag}] H0/H3/H4/H6 non salvati: {_eVNDplot}")
-
-
-
-
+                print(f"[VND:{tag}] H0/H3/H4/H6/H8 non salvati: {_eVNDplot}")
 
     except Exception as e:
         print(f"[VND:{tag}] SKIP per errore: {e}")
@@ -582,6 +590,14 @@ def solve_heuristic_only(inst, args, outdir: Path):
                 except Exception as _eH6ls:
                     print(f"[HEUR/1-move] H6 non salvato: {_eH6ls}")
 
+                # H8: distribuzione ΔC per tipo di mossa (boxplot)
+                try:
+                    plot_h8_deltaC_by_phase(trace_for_h3, str(ls_dir / "H8_deltaC_by_move.png"),
+                                            title="H8 – ΔC per tipo di mossa – 1-move")
+                except Exception as _eH8ls:
+                    print(f"[HEUR/1-move] H8 non salvato: {_eH8ls}")
+
+
         except Exception as _eplot:
             print(f"[HEUR] report LS non salvato: {_eplot}")
         # --- FINE REPORT 1-MOVE ---
@@ -690,8 +706,15 @@ def solve_heuristic_only(inst, args, outdir: Path):
                     except Exception as _eH6v:
                         print(f"[HEUR/VND] H6 non salvato: {_eH6v}")
 
+                    # H8: distribuzione ΔC per tipo di mossa (boxplot)
+                    try:
+                        plot_h8_deltaC_by_phase(trace_for_h3, str(vnd_dir / "H8_deltaC_by_move.png"),
+                                                title="H8 – ΔC per tipo di mossa – VND")
+                    except Exception as _eH8v:
+                        print(f"[HEUR/VND] H8 non salvato: {_eH8v}")
+
             except Exception as _eV:
-                print(f"[HEUR] plot VND (H0/H3/H4) non salvati: {_eV}")
+                print(f"[HEUR/VND] H0/H3/H4/H6/H8 non salvati: {_eV}")
 
         except Exception as e:
             print(f"[HEUR] VND SKIP per errore: {e}")

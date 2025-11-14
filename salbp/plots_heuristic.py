@@ -432,3 +432,91 @@ def plot_h6_delta_scatter(trace_csv: str,
     fig.tight_layout()
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
+
+
+def plot_h8_deltaC_by_phase(csv_path: str,
+                            out_png: str,
+                            title: str | None = None,
+                            include_init: bool = False,
+                            whisker=(5, 95)) -> None:
+    """
+    H8 – Boxplot della distribuzione di ΔC per fase (1move / swap / eject).
+    Non richiede pandas: legge il CSV con csv.DictReader.
+    """
+    import csv
+    import math
+    import matplotlib.pyplot as plt
+
+    # Fasi in ordine desiderato
+    phases_order = ["1move", "swap", "eject"]
+    if include_init:
+        phases_order = ["init"] + phases_order
+
+    # Colleziona ΔC per fase
+    values_by_phase = {ph: [] for ph in phases_order}
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            rd = csv.DictReader(f)
+            for row in rd:
+                ph = (row.get("phase") or "").strip()
+                if ph not in values_by_phase:
+                    continue
+                # dC può essere assente o non numerico → salta
+                try:
+                    dc_raw = row.get("dC", None)
+                    if dc_raw is None or dc_raw == "":
+                        continue
+                    dc = float(dc_raw)
+                    if math.isfinite(dc):
+                        values_by_phase[ph].append(dc)
+                except Exception:
+                    continue
+    except Exception:
+        # Se proprio non riusciamo ad aprire il file, placeholder
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "Impossibile leggere la trace per H8", ha="center", va="center")
+        if title:
+            fig.suptitle(title)
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+        return
+
+    # Prepara i gruppi nell'ordine
+    groups, labels = [], []
+    for ph in phases_order:
+        vals = values_by_phase[ph]
+        if len(vals) > 0:
+            groups.append(vals)
+            labels.append(ph)
+
+    # Nessun dato utile → placeholder gentile
+    if not groups:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "Nessuna mossa utile per H8", ha="center", va="center")
+        if title:
+            fig.suptitle(title)
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+        return
+
+    # whis dev'essere float o lista di percentili
+    if isinstance(whisker, (list, tuple)):
+        whis_param = list(whisker)
+    else:
+        whis_param = float(whisker)
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.boxplot(groups, labels=labels, showmeans=True, whis=whis_param)
+    ax.axhline(0.0, linewidth=1, alpha=0.5)
+    ax.set_ylabel("ΔC (nuovo C – vecchio C)")
+    ax.set_xlabel("Fase / tipo di mossa")
+    if title:
+        ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+
