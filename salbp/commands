@@ -1,0 +1,72 @@
+Cose da addrizzare: grana dei grafici PLI a volte troppo larga non si vedono dettagli, probabili grafici di performance da aggiungere, grafici di confronto da aggiungere,
+                    organizzazione cartelle correttamente per esecuzioni su tutti i dataset, far fare esecuzione automatica di tutto una volta finito senza cambiare ogni volta la stringa
+
+
+
+Link contenente numero stazioni m e C raggiunti per problemi nodi SALBP
+https://assembly-line-balancing.de/wp-content/uploads/2017/01/Scholl-1993-ALBData.pdf
+I PLI hanno un gap finale inferiore al 1% rispetto al valore C specificato nel pdf, ottimo
+Le euristiche performano peggio rispetto ai PLI com'è giusto che sia anche se non fanno cagare
+
+
+Questo comando funziona e fa 3 iterazioni, genera grafici con piu dettaglio
+
+--tasks
+salbp/examples/SCHOLL.csv
+--stations 8
+--heuristic-only
+--heuristic
+targetC-lpt
+--target-eps-step 700
+--post-vnd
+--vnd-secs 180
+--vnd-accept-equal
+--vnd-tie
+var
+--outdir
+outputs/SCHOLL/merdosa_bestfit_step500_vnd
+--log
+
+
+Questo comando funziona e fa 5 iterazioni, genera grafici con piu dettaglio
+
+--tasks
+salbp/examples/SCHOLL.csv
+--stations
+15
+--heuristic-only
+--heuristic
+targetC-lpt
+--target-eps-step
+700
+--post-vnd
+--vnd-secs
+180
+--vnd-accept-equal
+--vnd-tie
+var
+--outdir
+outputs/SCHOLL/merdosa_bestfit_step500_vnd
+--log
+
+
+Comando per PLI limite 5min
+
+--tasks
+salbp/examples/SCHOLL.csv
+--stations
+25
+--formulation
+both
+--time-limit
+300
+--log
+--post-vnd
+--vnd-secs
+60
+--vnd-accept-equal
+--vnd-tie
+var
+--outdir
+outputs/SCHOLL/pli_y_vnd
+--log
