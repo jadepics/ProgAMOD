@@ -28,6 +28,7 @@ from salbp.plots_heuristic import (
     plot_h8_deltaC_by_phase,
     plot_h11_tradeoff,
 )
+from salbp.plots_quality import plot_q1_apx_box
 
 from salbp.vnd import vnd_search  # VND metaeuristica
 
@@ -395,7 +396,65 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
             runtime=float(getattr(m, "Runtime", 0.0)),
             nodes=int(getattr(m, "NodeCount", 0)),
         )
+
+        import math as _math
+        n_tasks = len(inst.tasks)
+        sum_t = sum(inst.times.values())
+        M = int(args.stations)
+        LB1 = _math.ceil(sum_t / M) if M > 0 else None
+
+        row.update({
+            "n_tasks": n_tasks,
+            "sum_t": sum_t,
+            "M": M,
+            "LB1": LB1,
+        })
+
+        # normalizzo best bound (può essere None/nan)
+        best_bound = row.get("bound", None)
+        try:
+            if best_bound is not None and (isinstance(best_bound, float) and _math.isnan(best_bound)):
+                best_bound = None
+        except Exception:
+            pass
+        row["best_bound"] = best_bound
+
+        # APX: preferisci APX vs best_bound, fallback a LB1
+        C = row.get("obj_C", None)
+        apx_lb1 = (C / LB1) if (C is not None and LB1) else None
+        apx_bound = (C / best_bound) if (C is not None and best_bound and best_bound > 0) else None
+        row["apx_lb1"] = apx_lb1
+        row["apx_bound"] = apx_bound
+        row["apx"] = apx_bound if apx_bound is not None else apx_lb1
+
         save_run_metrics_per_formulation(Path(args.outdir), tag, row)
+
+        # --- FALLBACK: crea sempre un run_metrics_<tag>.csv in <outdir>/<tag>/ ---
+        try:
+            import csv as _csv
+            _metrics_dir = Path(args.outdir) / tag
+            _metrics_dir.mkdir(parents=True, exist_ok=True)
+            _csv_path = _metrics_dir / f"run_metrics_{tag}.csv"
+            if not _csv_path.exists():
+                with open(_csv_path, "w", newline="", encoding="utf-8") as _f:
+                    w = _csv.DictWriter(_f, fieldnames=list(row.keys()))
+                    w.writeheader()
+                    w.writerow(row)
+        except Exception as _ef:
+            print(f"[WARN] fallback metrics csv non salvato: {_ef}")
+
+
+
+        # ⬇️ NUOVO: Q1 boxplot aggregato sull'outdir (scandisce i vari run_metrics_*.csv)
+        try:
+            base = Path(args.outdir)
+            # se stai facendo both, metto i confronti in outputs/compare
+            q1_path = (base / "compare" / "Q1_apx_box.png") if args.formulation == "both" else (base / "Q1_apx_box.png")
+            q1_path.parent.mkdir(parents=True, exist_ok=True)
+            plot_q1_apx_box(metrics_source=base, out_png=str(q1_path))
+        except Exception as _eQ1:
+            print(f"[WARN] Q1 plot non salvato: {_eQ1}")
+
     except Exception as e:
         print(f"[WARN] metriche non salvate: {e}")
 
@@ -767,9 +826,74 @@ def solve_heuristic_only(inst, args, outdir: Path):
     except Exception:
         pass
 
+    # ⬇️ NUOVO: salvataggio metriche per Q1 anche in heuristic-only
+    try:
+        import math as _math
+        # etichetta algoritmo coerente (heuristic / heuristic+1move / heuristic+vnd / heuristic+1move+vnd)
+        tag = "heuristic"
+        if getattr(args, "post_1move", False) and getattr(args, "post_vnd", False):
+            tag = "heuristic+1move+vnd"
+        elif getattr(args, "post_1move", False):
+            tag = "heuristic+1move"
+        elif getattr(args, "post_vnd", False):
+            tag = "heuristic+vnd"
+
+        # row base (runtime/nodes non disponibili: mettiamo None)
+        row = build_run_summary(
+            formulation=tag,
+            instance_name=Path(getattr(args, "tasks")).name,
+            loads=loads,
+            obj_C=C,
+            bound=None,  # nessun best-bound da solver in heuristic-only
+            runtime=None,
+            nodes=None,
+        )
+
+        # qualità
+        n_tasks = len(inst.tasks)
+        sum_t = sum(inst.times.values())
+        M = int(args.stations)
+        LB1 = _math.ceil(sum_t / M) if M > 0 else None
+
+        row.update({
+            "n_tasks": n_tasks,
+            "sum_t": sum_t,
+            "M": M,
+            "LB1": LB1,
+            "best_bound": None,
+            "apx_lb1": (C / LB1) if (C is not None and LB1) else None,
+            "apx_bound": None,
+        })
+        row["apx"] = row["apx_lb1"]
+
+        save_run_metrics_per_formulation(Path(args.outdir), tag, row)
+
+        # --- FALLBACK: come sopra, ma per heuristic-only ---
+        try:
+            import csv as _csv
+            _metrics_dir = Path(args.outdir) / tag
+            _metrics_dir.mkdir(parents=True, exist_ok=True)
+            _csv_path = _metrics_dir / f"run_metrics_{tag}.csv"
+            if not _csv_path.exists():
+                with open(_csv_path, "w", newline="", encoding="utf-8") as _f:
+                    w = _csv.DictWriter(_f, fieldnames=list(row.keys()))
+                    w.writeheader()
+                    w.writerow(row)
+        except Exception as _ef:
+            print(f"[WARN] fallback metrics csv non salvato (heuristic): {_ef}")
+
+        # Q1 per tutto l'outdir (così confronti heuristic / heuristic+vnd / ecc)
+        try:
+            base = Path(args.outdir)
+            q1_path = base / "Q1_apx_box.png"
+            plot_q1_apx_box(metrics_source=base, out_png=str(q1_path))
+        except Exception as _eQ1:
+            print(f"[WARN] Q1 plot non salvato: {_eQ1}")
+
+    except Exception as _em:
+        print(f"[WARN] metriche heuristic-only non salvate: {_em}")
+
     return st_map, loads, C
-
-
 
     # carichi / assegnamento
 '''loads = [l for _, l in sorted(sol.station_loads)]
@@ -868,11 +992,20 @@ def main():
     # Grafici comparativi se both
     if args.formulation == "both":
         base = Path(args.outdir)
+        compare_dir = base / "compare"
         plot_progress_compare(base / "y" / "progress.csv", base / "prefix" / "progress.csv",
-                              str(base / "compare" / "progress_compare.png"))
+                              str(compare_dir / "progress_compare.png"))
         plot_gap_compare(base / "y" / "progress.csv", base / "prefix" / "progress.csv",
-                         str(base / "compare" / "gap_compare.png"))
-        print(f"\nGrafici comparativi salvati in: {base / 'compare'}")
+                         str(compare_dir / "gap_compare.png"))
+
+        # ⬇️ aggiunta: genera Q1 ora che *entrambi* i CSV run_metrics_* sono stati scritti
+        try:
+            q1_path = compare_dir / "Q1_apx_box.png"
+            plot_q1_apx_box(metrics_source=base, out_png=str(q1_path))
+        except Exception as _eQ1:
+            print(f"[WARN] Q1 plot non salvato (fase finale): {_eQ1}")
+
+        print(f"\nGrafici comparativi salvati in: {compare_dir}")
 
 
 if __name__ == "__main__":
