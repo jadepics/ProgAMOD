@@ -28,7 +28,7 @@ from salbp.plots_heuristic import (
     plot_h8_deltaC_by_phase,
     plot_h11_tradeoff,
 )
-from salbp.plots_quality import plot_q1_apx_box, plot_q2_apx_ecdf
+from salbp.plots_quality import plot_q1_apx_box, plot_q2_apx_ecdf, plot_q3_success_rate
 
 from salbp.vnd import vnd_search  # VND metaeuristica
 
@@ -451,8 +451,11 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
 
             # sempre in compare
             plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
-            # vedi PATCH 2: include="all" o include="pli"
             plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
+            # NEW: Q3 success rate (tau=1.01 modificabile)
+            plot_q3_success_rate(metrics_source=base, out_png=str(compare_dir / "Q3_success_rate.png"), tau=1.01,
+                                 include="all")
+
 
 
         except Exception as _eQ:
@@ -894,8 +897,11 @@ def solve_heuristic_only(inst, args, outdir: Path):
 
             # salva SEMPRE in compare/
             plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
-            # se vuoi solo PLI passa include="pli", altrimenti "all"
             plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
+            # NEW: Q3 anche per heuristic-only
+            plot_q3_success_rate(metrics_source=base, out_png=str(compare_dir / "Q3_success_rate.png"), tau=1.01,
+                                 include="all")
+
         except Exception as _eQ:
             print(f"[WARN] Q1/Q2 plot non salvati: {_eQ}")
 
@@ -1011,12 +1017,15 @@ def main():
         plot_gap_compare(base / "y" / "progress.csv", base / "prefix" / "progress.csv",
                          str(compare_dir / "gap_compare.png"))
 
-        # ⬇️ Q1 + Q2 ora che *entrambi* i run_metrics_* sono presenti
+        # ⬇️ Q1 + Q2 + Q3 ora che *entrambi* i run_metrics_* sono presenti
         try:
             plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
             plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
+            # NEW: Q3 success rate
+            plot_q3_success_rate(metrics_source=base, out_png=str(compare_dir / "Q3_success_rate.png"), tau=1.01,
+                                 include="all")
         except Exception as _eQ:
-            print(f"[WARN] Q1/Q2 plot non salvati (fase finale): {_eQ}")
+            print(f"[WARN] Q1/Q2/Q3 plot non salvati (fase finale): {_eQ}")
 
 
 if __name__ == "__main__":

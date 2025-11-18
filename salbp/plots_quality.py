@@ -252,4 +252,85 @@ def plot_q2_apx_ecdf(metrics_source, out_png, include="all"):
     plt.savefig(out_png, bbox_inches="tight")
     plt.close()
 
+def plot_q3_success_rate(metrics_source, out_png, tau=1.01, include="all"):
+    """
+    Q3 – Success rate: quota di run con APX ≤ tau per ciascun algoritmo/gruppo.
+    - tau: soglia (default 1.01)
+    - include: "all" (default) / "pli" / insieme esplicito di etichette
+    """
+    from collections import defaultdict
+    src = Path(metrics_source)
+
+    counts = defaultdict(int)
+    good   = defaultdict(int)
+
+    for csv_file in src.rglob("run_metrics_*.csv"):
+        row = _read_first_row(csv_file)
+        if not row:
+            continue
+
+        g = str(row.get("formulation") or row.get("tag") or csv_file.parent.name)
+
+        apx = _as_float(row.get("apx"))
+        if apx is None:
+            apx = _as_float(row.get("apx_bound"))
+        if apx is None:
+            apx = _as_float(row.get("apx_lb1"))
+        if apx is None:
+            continue
+
+        counts[g] += 1
+        if apx <= float(tau):
+            good[g] += 1
+
+    # filtro include
+    pli_set = {"y", "prefix"}
+    if include == "pli":
+        keys = [g for g in counts if g in pli_set]
+    elif isinstance(include, (set, list, tuple)):
+        keys = [g for g in counts if g in include]
+    else:
+        keys = list(counts.keys())
+
+    keys = sorted(keys)
+    if not keys:
+        plt.figure(figsize=(8, 3))
+        plt.text(0.5, 0.5, "Nessun dato trovato per Q3", ha="center", va="center")
+        Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+        plt.axis("off")
+        plt.savefig(out_png, bbox_inches="tight")
+        plt.close()
+        return
+
+    rates = [(good[k] / counts[k]) if counts[k] else 0.0 for k in keys]
+
+    # palette coerente con Q2
+    _palette = {
+        "prefix": "tab:blue",
+        "y": "tab:orange",
+        "heuristic": "tab:green",
+        "heuristic+1move": "tab:purple",
+        "heuristic+vnd": "tab:red",
+        "heuristic+1move+vnd": "tab:brown",
+    }
+    colors = [_palette.get(k, None) for k in keys]
+
+    plt.figure(figsize=(10, 5))
+    bars = plt.bar(keys, rates, color=colors, edgecolor="black", linewidth=0.6)
+
+    # etichette “g/b (n)” sopra ogni barra
+    for i, b in enumerate(bars):
+        txt = f"{good[keys[i]]}/{counts[keys[i]]} (n)"
+        plt.text(b.get_x() + b.get_width()/2, b.get_height() + 0.02, txt,
+                 ha="center", va="bottom", fontsize=9)
+
+    plt.ylim(0.0, 1.05)
+    plt.ylabel(f"Quota con APX ≤ {tau}")
+    plt.xlabel("Algoritmo / Formulazione")
+    plt.title("Q3 – Success rate entro soglia APX")
+    plt.grid(True, ls=":", alpha=0.4, axis="y")
+    Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(out_png, bbox_inches="tight")
+    plt.close()
 
