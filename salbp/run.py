@@ -28,7 +28,7 @@ from salbp.plots_heuristic import (
     plot_h8_deltaC_by_phase,
     plot_h11_tradeoff,
 )
-from salbp.plots_quality import plot_q1_apx_box
+from salbp.plots_quality import plot_q1_apx_box, plot_q2_apx_ecdf
 
 from salbp.vnd import vnd_search  # VND metaeuristica
 
@@ -443,17 +443,21 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
         except Exception as _ef:
             print(f"[WARN] fallback metrics csv non salvato: {_ef}")
 
-
-
-        # ⬇️ NUOVO: Q1 boxplot aggregato sull'outdir (scandisce i vari run_metrics_*.csv)
+        # ⬇️ NUOVO: Q1 + Q2 quality plots aggregati sull'outdir
         try:
             base = Path(args.outdir)
-            # se stai facendo both, metto i confronti in outputs/compare
-            q1_path = (base / "compare" / "Q1_apx_box.png") if args.formulation == "both" else (base / "Q1_apx_box.png")
-            q1_path.parent.mkdir(parents=True, exist_ok=True)
-            plot_q1_apx_box(metrics_source=base, out_png=str(q1_path))
-        except Exception as _eQ1:
-            print(f"[WARN] Q1 plot non salvato: {_eQ1}")
+            compare_dir = base / "compare"
+            compare_dir.mkdir(parents=True, exist_ok=True)
+
+            # sempre in compare
+            plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
+            # vedi PATCH 2: include="all" o include="pli"
+            plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
+
+
+        except Exception as _eQ:
+            print(f"[WARN] Q1/Q2 plot non salvati: {_eQ}")
+
 
     except Exception as e:
         print(f"[WARN] metriche non salvate: {e}")
@@ -882,13 +886,20 @@ def solve_heuristic_only(inst, args, outdir: Path):
         except Exception as _ef:
             print(f"[WARN] fallback metrics csv non salvato (heuristic): {_ef}")
 
-        # Q1 per tutto l'outdir (così confronti heuristic / heuristic+vnd / ecc)
+        # Q1 + Q2 per tutto l'outdir (confronto heuristic / heuristic+vnd / ecc)
         try:
             base = Path(args.outdir)
-            q1_path = base / "Q1_apx_box.png"
-            plot_q1_apx_box(metrics_source=base, out_png=str(q1_path))
-        except Exception as _eQ1:
-            print(f"[WARN] Q1 plot non salvato: {_eQ1}")
+            compare_dir = base / "compare"
+            compare_dir.mkdir(parents=True, exist_ok=True)
+
+            # salva SEMPRE in compare/
+            plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
+            # se vuoi solo PLI passa include="pli", altrimenti "all"
+            plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
+        except Exception as _eQ:
+            print(f"[WARN] Q1/Q2 plot non salvati: {_eQ}")
+
+
 
     except Exception as _em:
         print(f"[WARN] metriche heuristic-only non salvate: {_em}")
@@ -993,19 +1004,19 @@ def main():
     if args.formulation == "both":
         base = Path(args.outdir)
         compare_dir = base / "compare"
+        compare_dir.mkdir(parents=True, exist_ok=True)  # ⬅️ CREA LA CARTELLA
+
         plot_progress_compare(base / "y" / "progress.csv", base / "prefix" / "progress.csv",
                               str(compare_dir / "progress_compare.png"))
         plot_gap_compare(base / "y" / "progress.csv", base / "prefix" / "progress.csv",
                          str(compare_dir / "gap_compare.png"))
 
-        # ⬇️ aggiunta: genera Q1 ora che *entrambi* i CSV run_metrics_* sono stati scritti
+        # ⬇️ Q1 + Q2 ora che *entrambi* i run_metrics_* sono presenti
         try:
-            q1_path = compare_dir / "Q1_apx_box.png"
-            plot_q1_apx_box(metrics_source=base, out_png=str(q1_path))
-        except Exception as _eQ1:
-            print(f"[WARN] Q1 plot non salvato (fase finale): {_eQ1}")
-
-        print(f"\nGrafici comparativi salvati in: {compare_dir}")
+            plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
+            plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
+        except Exception as _eQ:
+            print(f"[WARN] Q1/Q2 plot non salvati (fase finale): {_eQ}")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,15 @@
+from pathlib import Path
+import csv
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import defaultdict  # ⬅️ AGGIUNTO
+
+# pandas opzionale (se non c'è, usiamo csv)
+try:
+    import pandas as pd  # noqa
+except Exception:
+    pd = None
+
 def plot_q1_apx_box(metrics_source, out_png: str):
     """
     Q1 – Boxplot qualità (APX = C / LB) aggregando CSV di metriche.
@@ -109,6 +121,135 @@ def plot_q1_apx_box(metrics_source, out_png: str):
     Path(out_png).parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
     plt.savefig(out_png, dpi=150)
+    plt.close()
+
+# --- Q2: ECDF dell'APX per algoritmo -----------------------------------------
+
+def _read_first_row(csv_path: Path):
+    """Legge la prima riga di run_metrics_*.csv come dict.
+       Usa pandas se disponibile, altrimenti csv.DictReader."""
+    row = None
+    if pd is not None:
+        try:
+            df = pd.read_csv(csv_path)
+            if df is not None and len(df) > 0:
+                row = df.iloc[0].to_dict()
+        except Exception:
+            row = None
+    if row is None:
+        try:
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                rd = csv.DictReader(f)
+                row = next(rd, None)
+        except Exception:
+            row = None
+    return row or {}
+
+def _as_float(x):
+    try:
+        v = float(x)
+        if np.isnan(v):
+            return None
+        return v
+    except Exception:
+        return None
+
+def plot_q2_apx_ecdf(metrics_source, out_png, include="all"):
+    """
+    ECDF dell'APX raggruppata per 'formulation' (y, prefix, heuristic, heuristic+vnd, ...)
+
+    include:
+      - "all"  -> PLI + euristiche
+      - "pli"  -> solo y, prefix
+      - iterable esplicito, es: {"heuristic","heuristic+vnd"}
+    """
+    src = Path(metrics_source)
+    groups = defaultdict(list)
+
+    for csv_file in src.rglob("run_metrics_*.csv"):
+        row = _read_first_row(csv_file)
+        if not row:
+            continue
+
+        # nome del gruppo
+        g = str(row.get("formulation") or row.get("tag") or csv_file.parent.name)
+
+        # APX: preferisci 'apx', poi 'apx_bound', poi 'apx_lb1'
+        apx = _as_float(row.get("apx"))
+        if apx is None:
+            apx = _as_float(row.get("apx_bound"))
+        if apx is None:
+            apx = _as_float(row.get("apx_lb1"))
+        if apx is None:
+            continue
+
+        groups[g].append(apx)
+
+    # filtro include
+    pli_set = {"y", "prefix"}
+    if include == "pli":
+        groups = {g: v for g, v in groups.items() if g in pli_set}
+    elif isinstance(include, (set, list, tuple)):
+        groups = {g: v for g, v in groups.items() if g in include}
+    # else: "all" -> nessun filtro
+
+    plt.figure(figsize=(12, 6))
+    if not groups:
+        plt.text(0.5, 0.5, "Nessun dato trovato per Q2", ha="center", va="center", fontsize=14)
+        plt.axis("off")
+        plt.savefig(out_png, bbox_inches="tight")
+        plt.close()
+        return
+
+    from itertools import cycle  # palette marker
+
+    _palette = {
+        "prefix": "tab:blue",
+        "y": "tab:orange",
+        "heuristic": "tab:green",
+        "heuristic+1move": "tab:purple",
+        "heuristic+vnd": "tab:red",
+        "heuristic+1move+vnd": "tab:brown",
+    }
+    _markers = cycle(["o", "s", "D", "^", "v", "P", "X"])
+
+    # disegna ECDF per ogni gruppo, gestendo il caso "un solo punto"
+    x_all = []
+    for g, vals in sorted(groups.items()):
+        x = np.sort(np.asarray(vals, dtype=float))
+        x_all.extend(x.tolist())
+
+        color = _palette.get(g)
+        line_kwargs = {"color": color, "linewidth": 2} if color is not None else {"linewidth": 2}
+        sc_kwargs = {"color": color, "edgecolors": "white", "linewidths": 0.7} if color is not None else {
+            "edgecolors": "white", "linewidths": 0.7}
+        marker = next(_markers)
+
+        if len(x) == 1:
+            # linea verticale + marker con colore coerente
+            plt.vlines(x[0], 0.0, 1.0, linestyles="-", label=g, **line_kwargs)
+            plt.scatter([x[0]], [1.0], s=35, marker=marker, zorder=3, **sc_kwargs)
+        else:
+            y = np.arange(1, len(x) + 1) / len(x)
+            xs = np.r_[x[0], x]  # parte da 0 per mostrare il salto
+            ys = np.r_[0.0, y]
+            plt.step(xs, ys, where="post", label=g, **line_kwargs)
+            plt.scatter(x, y, s=25, marker=marker, zorder=3, **sc_kwargs)
+
+    # assi chiari
+    if x_all:
+        xmin, xmax = float(min(x_all)), float(max(x_all))
+        pad = max(1e-4, 0.01 * (xmax - xmin))
+        plt.xlim(xmin - pad, xmax + pad)
+
+    plt.ylim(0.0, 1.0)
+    plt.xlabel("APX (minore è meglio)")
+    plt.ylabel("F(APX ≤ x)")
+    plt.title("Q2 – ECDF dell'APX per algoritmo")
+    plt.grid(True, ls=":", alpha=0.4)
+    plt.legend(loc="lower right")
+    Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_png, bbox_inches="tight")
     plt.close()
 
 
