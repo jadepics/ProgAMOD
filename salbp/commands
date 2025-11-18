@@ -1,5 +1,7 @@
 Cose da addrizzare: grana dei grafici PLI a volte troppo larga non si vedono dettagli, probabili grafici di performance da aggiungere, grafici di confronto da aggiungere,
-                    organizzazione cartelle correttamente per esecuzioni su tutti i dataset, far fare esecuzione automatica di tutto una volta finito senza cambiare ogni volta la stringa
+                    organizzazione cartelle correttamente per esecuzioni su tutti i dataset, far fare esecuzione automatica di tutto una volta finito senza cambiare ogni volta la stringa,
+                    capire correttezza di heuristic-only no post-vnd o post-1move per vedere se ci devono essere grafici anche su quello.
+                    Box plot sono: primo quantile, mediana, terzo quantile, minimo, massimo e outlayer (non so se si scrive cosi)
 
 
 
