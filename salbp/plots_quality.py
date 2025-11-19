@@ -1,6 +1,7 @@
 from pathlib import Path
 import csv
 import numpy as np
+import re
 import matplotlib.pyplot as plt
 from collections import defaultdict  # ⬅️ AGGIUNTO
 
@@ -335,36 +336,79 @@ def plot_q3_success_rate(metrics_source, out_png, tau=1.01, include="all"):
     plt.close()
 
 
+# ===================== _iter_metric_rows (drop-in) =====================
 def _iter_metric_rows(csv_path: Path):
-    """Itera TUTTE le righe di un CSV metriche come dict (pandas se presente, altrimenti csv.DictReader)."""
-    # pandas
-    if pd is not None:
+    """Itera TUTTE le righe di un CSV metriche come dict (pandas se presente, altrimenti csv.DictReader).
+       Normalizza: instance_name (molti alias), obj_C, numerici -> float/int robusti."""
+    def _norm_instance(value):
+        inst = value
         try:
-            df = pd.read_csv(csv_path)
-            # normalizza NaN -> None
+            s = str(inst).strip()
+            if s == "" or s.lower() in ("none", "nan"):
+                return None
+            # se è un path o termina con .csv → prendi lo stem
+            if ("/" in s) or ("\\" in s) or s.lower().endswith(".csv"):
+                from pathlib import Path as _P
+                return _P(s).stem
+            return s
+        except Exception:
+            return None
+
+    if _pd is not None:
+        try:
+            df = _pd.read_csv(csv_path)
             for _, r in (df if df is not None else []).iterrows():
-                d = {}
-                for k, v in r.to_dict().items():
-                    try:
-                        # mantieni stringhe così come sono; NaN -> None
-                        if v is None or (hasattr(v, "is_nan") and v.is_nan()) or (isinstance(v, float) and np.isnan(v)):
-                            d[k] = None
-                        else:
-                            d[k] = v
-                    except Exception:
-                        d[k] = v
-                yield d
+                inst = (
+                    r.get("instance_name")
+                    or r.get("instance")
+                    or r.get("name")
+                    or r.get("dataset")
+                    or r.get("file")
+                )
+                yield {
+                    "instance_name": _norm_instance(inst),
+                    "formulation": r.get("formulation") or r.get("algo") or r.get("algorithm"),
+                    "n_tasks": _to_int(r.get("n_tasks")),
+                    "apx": _to_float(r.get("apx")),
+                    "runtime": _to_float(r.get("runtime")),
+                    "LB1": _to_float(r.get("LB1")),
+                    "best_bound": _to_float(r.get("best_bound")),
+                    "gap_final": _to_float(r.get("gap_final")),
+                    "obj_C": _to_float(r.get("obj_C") or r.get("C") or r.get("obj_c")),
+                    "loads": r.get("loads"),
+                }
             return
         except Exception:
             pass
+
     # csv stdlib
     try:
         with open(csv_path, newline="", encoding="utf-8") as f:
             rd = csv.DictReader(f)
             for r in rd:
-                yield r
+                inst = (
+                    r.get("instance_name")
+                    or r.get("instance")
+                    or r.get("name")
+                    or r.get("dataset")
+                    or r.get("file")
+                )
+                yield {
+                    "instance_name": _norm_instance(inst),
+                    "formulation": r.get("formulation") or r.get("algo") or r.get("algorithm"),
+                    "n_tasks": _to_int(r.get("n_tasks")),
+                    "apx": _to_float(r.get("apx")),
+                    "runtime": _to_float(r.get("runtime")),
+                    "LB1": _to_float(r.get("LB1")),
+                    "best_bound": _to_float(r.get("best_bound")),
+                    "gap_final": _to_float(r.get("gap_final")),
+                    "obj_C": _to_float(r.get("obj_C") or r.get("C") or r.get("obj_c")),
+                    "loads": r.get("loads"),
+                }
     except Exception:
         return
+
+
 
 def plot_q4_runtime_ecdf(metrics_source, out_png, include="all", cap_sec=None, logx=False):
     """
@@ -403,9 +447,9 @@ def plot_q4_runtime_ecdf(metrics_source, out_png, include="all", cap_sec=None, l
     scanned = []  # per debug
 
     for csv_path in csv_files:
-        # leggi tutte le righe
+        last_cols = []
         for row in _iter_metric_rows(csv_path):
-            # normalizza chiavi
+        # normalizza chiavi
             norm = {}
             for k, v in (row or {}).items():
                 kk = (k or "").strip().lower()
@@ -438,7 +482,8 @@ def plot_q4_runtime_ecdf(metrics_source, out_png, include="all", cap_sec=None, l
             if rt is not None:
                 groups[g].append(rt)
 
-        scanned.append((csv_path, list((row or {}).keys())))
+            last_cols = list((row or {}).keys())
+        scanned.append((csv_path, last_cols))
 
     # 3) filtro include
     pli_set = {"y", "prefix"}
@@ -678,9 +723,527 @@ def plot_q5_apx_vs_runtime(metrics_source,
 # se non c'è già nel file, aggiungi/lascia questa helper:
 def _render_no_data(out_png, msg):
     import matplotlib.pyplot as plt
+    from pathlib import Path
+    Path(out_png).parent.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(8, 4), dpi=150)
-    plt.text(0.5, 0.5, msg, ha="center", va="center")
+    plt.text(0.5, 0.55, "Nessun dato per questo grafico", ha="center", va="center", fontsize=13)
+    plt.text(0.5, 0.35, str(msg), ha="center", va="center", fontsize=9)
     plt.axis("off")
     plt.tight_layout()
     plt.savefig(out_png)
     plt.close()
+
+
+
+# === Helpers robusti ===
+import os
+from pathlib import Path
+
+try:
+    import pandas as _pd
+except Exception:
+    _pd = None
+
+import csv
+import math
+import matplotlib.pyplot as plt
+
+def _to_int(x):          # ⬅️ AGGIUNTO (versione robusta)
+    try:
+        if x is None or str(x).strip().lower() in ("", "none", "nan"):
+            return None
+        return int(round(float(str(x).replace(",", "."))))
+    except Exception:
+        return None
+
+
+def _safe_lower(x, default=""):
+    return str(x).lower() if x is not None else str(default).lower()
+
+
+def _to_float(x):
+    try:
+        if x is None:
+            return None
+        xs = str(x).strip()
+        if xs == "" or xs.lower() in ("none", "nan", "inf", "-inf"):
+            return None
+        return float(xs.replace(",", "."))
+    except Exception:
+        try:
+            return float(str(x).replace(",", "."))
+        except Exception:
+            return None
+
+
+def _algo_group(label):
+    """Raggruppa per famiglia, utile per include='pli'/'heuristic'."""
+    s = _safe_lower(label)
+    if s in ("y", "prefix") or s.startswith("y") or s.startswith("prefix"):
+        return "pli"
+    # tutto il resto lo consideriamo euristica
+    return "heuristic"
+
+
+def _iter_metrics_rows(metrics_source):
+    """Itera su tutte le righe dei vari run_metrics_*.csv sotto metrics_source."""
+    base = Path(metrics_source)
+    files = []
+    if base.is_file():
+        files = [base]
+    elif base.is_dir():
+        files = sorted(base.rglob("run_metrics_*.csv"))
+    else:
+        return
+
+    for f in files:
+        # prova pandas, altrimenti csv stdlib
+        if _pd is not None:
+            try:
+                df = _pd.read_csv(f)
+                for _, r in df.iterrows():
+                    yield {
+                        "instance_name": r.get("instance_name"),
+                        "formulation": r.get("formulation") or r.get("algo") or r.get("algorithm"),
+                        "n_tasks": _to_int(r.get("n_tasks")),
+                        "apx": _to_float(r.get("apx")),
+                        "runtime": _to_float(r.get("runtime")),
+                        "LB1": _to_float(r.get("LB1")),
+                        "best_bound": _to_float(r.get("best_bound")),
+                        "gap_final": _to_float(r.get("gap_final")),
+                        "loads": r.get("loads"),  # se mai salvassi i carichi in testo
+                    }
+                continue
+            except Exception:
+                pass
+        # fallback: csv
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                rdr = csv.DictReader(fh)
+                for r in rdr:
+                    yield {
+                        "instance_name": r.get("instance_name"),
+                        "formulation": r.get("formulation") or r.get("algo") or r.get("algorithm"),
+                        "n_tasks": _to_int(r.get("n_tasks")),
+                        "apx": _to_float(r.get("apx")),
+                        "runtime": _to_float(r.get("runtime")),
+                        "LB1": _to_float(r.get("LB1")),
+                        "best_bound": _to_float(r.get("best_bound")),
+                        "gap_final": _to_float(r.get("gap_final")),
+                        "loads": r.get("loads"),
+                    }
+        except Exception:
+            continue
+
+
+def _collect_metrics(metrics_source, include="all"):
+    """
+    Raccoglie metriche in modo robusto:
+    - se 'formulation' manca, prova a dedurla dal nome file/cartella
+    - non scarta righe “incomplete”: lascia i campi a None, poi i grafici decidono cosa fare
+    """
+    base = Path(metrics_source)
+    inc = (_safe_lower(include, "all"))
+    rows = []
+
+    # per dedurre l'algoritmo dal path del CSV (fallback)
+    def _algo_from_path(csv_path: Path):
+        # es. .../y/run_metrics_y.csv -> 'y'
+        # es. .../heuristic/run_metrics_heuristic.csv -> 'heuristic'
+        name = csv_path.stem  # run_metrics_<qualcosa>
+        m = re.match(r"run_metrics_([A-Za-z0-9+._\-]+)$", name)
+        if m:
+            return m.group(1)
+        # altrimenti prova il nome cartella
+        p = csv_path.parent.name.lower()
+        if p in {"y", "prefix", "heuristic", "heuristic+vnd", "heuristic+1move", "heuristic+1move+vnd"}:
+            return p
+        return "unknown"
+
+    # estendi _iter_metrics_rows per fornirci anche il path (se non ce l'hai già)
+    for csv_file in sorted(base.rglob("run_metrics_*.csv")):
+        # leggi tutte le righe del file
+        for r in _iter_metric_rows(csv_file):  # usa il reader che legge TUTTE le righe
+            algo = r.get("formulation") or r.get("algo") or r.get("algorithm")
+            if not algo:
+                algo = _algo_from_path(csv_file)
+
+            # filtri include
+            grp = _algo_group(algo)
+            if inc == "pli" and grp != "pli":
+                continue
+            if inc == "heuristic" and grp != "heuristic":
+                continue
+
+            rows.append({
+                "instance_name": r.get("instance_name"),
+                "algo": str(algo),
+                "group": grp,
+                "n_tasks": r.get("n_tasks"),
+                "apx": r.get("apx"),
+                "runtime": r.get("runtime"),
+                "gap_final": r.get("gap_final"),
+                "LB1": r.get("LB1"),
+                "best_bound": r.get("best_bound"),
+                "obj_C": r.get("obj_C") or r.get("C") or r.get("obj_c"),
+            })
+
+    return rows
+
+
+
+def _size_bins_auto(n_list, k=3):
+    """Restituisce k bin quasi equilibrati su |T|.
+       Converte tutto a int per evitare 'str * float' nelle quantili."""
+    vals = []
+    for v in n_list:
+        iv = _to_int(v)
+        if iv is not None:
+            vals.append(iv)
+    a = sorted(vals)
+    if not a:
+        return [(0, float("inf"), "All")]
+    if len(a) <= k:
+        return [(0, float("inf"), "All")]
+
+    qs = []
+    for i in range(1, k):
+        qpos = (len(a) - 1) * i / k
+        lo = int(math.floor(qpos)); hi = int(math.ceil(qpos))
+        if lo == hi:
+            q = float(a[lo])
+        else:
+            # interpolazione lineare su float (a[lo], a[hi] sono int → cast a float)
+            q = float(a[lo]) * (hi - qpos) + float(a[hi]) * (qpos - lo)
+        qs.append(q)
+
+    edges = [0] + [max(1, int(round(float(x)))) for x in qs] + [int(a[-1]) + 1]
+    labels = ["Small", "Medium", "Large"] if k == 3 else [f"B{i+1}" for i in range(k)]
+    return [(edges[i], edges[i+1], labels[i]) for i in range(k)]
+
+
+
+def _assign_bin(v, bins):
+    for L, R, name in bins:
+        if v is None:
+            return name
+        if (v >= L) and (v < R):
+            return name
+    return bins[-1][2]
+
+
+# ============ Q12 ============
+# ===================== Q12 (drop-in) =====================
+def plot_q12_apx_vs_size_candles(metrics_source, out_png, include="all", size_bins=None, apx_col="apx"):
+    try:
+        data = _collect_metrics(metrics_source, include=include)
+        if not data:
+            _render_no_data(out_png, "Q12: nessun dato")
+            return
+
+        # bins
+        if size_bins is None:
+            bins = _size_bins_auto([d["n_tasks"] for d in data], k=3)
+        else:
+            if all(isinstance(b, (tuple, list)) and len(b) == 3 for b in size_bins):
+                bins = size_bins
+            else:
+                edges = [e for e in size_bins]
+                labels = [f"B{i+1}" for i in range(len(edges)-1)]
+                bins = [(int(edges[i]), int(edges[i+1]), labels[i]) for i in range(len(edges)-1)]
+
+        # raggruppa per bin e algoritmo
+        by_key = {}
+        algos = []
+        for d in data:
+            algo = d["algo"]
+            if algo not in algos:
+                algos.append(algo)
+            bname = _assign_bin(d["n_tasks"], bins)
+            key = (bname, algo)
+            by_key.setdefault(key, []).append(_to_float(d.get(apx_col)))
+
+        bins_order = [b[2] for b in bins]
+        algos_order = sorted(algos)
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        width = 0.8 / max(1, len(algos_order))
+        positions, boxdata = [], []
+
+        for ai, algo in enumerate(algos_order):
+            for bi, bname in enumerate(bins_order):
+                vals = [v for v in by_key.get((bname, algo), []) if v is not None]
+                if not vals:
+                    continue
+                x = bi + (ai - (len(algos_order)-1)/2) * width
+                positions.append(x)
+                boxdata.append(vals)
+
+        if not boxdata:
+            _render_no_data(out_png, "Q12: nessun dato valido")
+            return
+
+        ax.boxplot(boxdata, positions=positions, widths=width, patch_artist=False, manage_ticks=False)
+        ax.set_xticks(range(len(bins_order)))
+        ax.set_xticklabels(bins_order)
+        ax.set_xlabel("|T| bins")
+        ax.set_ylabel("APX")
+        ax.set_title("Q12 — APX vs dimensione (box per bin e algoritmo)")
+        # niente legend “vuota”
+        fig.tight_layout()
+        Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+    except Exception as e:
+        _render_no_data(out_png, f"Q12 error: {e}")
+
+
+# ============ Q13 ============
+def plot_q13_apx_vs_size_scatter(metrics_source, out_png, include="all", apx_col="apx"):
+    try:
+        data = _collect_metrics(metrics_source, include=include)
+        if not data:
+            Path(out_png).with_suffix(".debug.txt").write_text("[Q13] nessun dato\n", encoding="utf-8")
+            _render_no_data(out_png, "Q13: dati mancanti")
+            return
+
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(10, 5))
+        algos = sorted(set(d["algo"] for d in data))
+        any_point = False
+        for algo in algos:
+            xs = [d["n_tasks"] for d in data if d["algo"] == algo and d["n_tasks"] is not None and d[apx_col] is not None]
+            ys = [d[apx_col] for d in data if d["algo"] == algo and d["n_tasks"] is not None and d[apx_col] is not None]
+            if xs and ys:
+                any_point = True
+                ax.scatter(xs, ys, label=algo, s=15)
+        if not any_point:
+            Path(out_png).with_suffix(".debug.txt").write_text("[Q13] nessun punto valido\n", encoding="utf-8")
+            _render_no_data(out_png, "Q13: nessun punto valido")
+            return
+        ax.set_xlabel("|T| (numero task)")
+        ax.set_ylabel("APX")
+        ax.set_title("Q13 — APX vs dimensione (scatter)")
+        if algos:
+            ax.legend(loc="best", frameon=False)
+        fig.tight_layout()
+        Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+    except Exception as e:
+        Path(out_png).with_suffix(".debug.txt").write_text(f"[Q13] eccezione: {e}\n", encoding="utf-8")
+        _render_no_data(out_png, f"Q13 error: {e}")
+
+
+
+# ============ Q14 ============
+# ===================== Q14 (drop-in) =====================
+def plot_q14_improvement_vs_baseline(metrics_source, out_png, baseline="auto"):
+    """
+    Q14 — Miglioramento percentuale di C rispetto a una baseline per la *stessa istanza*.
+    C robusto: obj_C -> apx*LB1 -> apx*best_bound.
+    """
+    try:
+        rows = list(_collect_metrics(metrics_source, include="all"))
+        if not rows:
+            Path(out_png).with_suffix(".debug.txt").write_text("[Q14] nessun dato\n", encoding="utf-8")
+            _render_no_data(out_png, "Q14: dati mancanti")
+            return
+
+        # helper per C
+        def _C_of(row):
+            if not row:
+                return None
+            C = _to_float(row.get("obj_C") or row.get("C") or row.get("obj_c"))
+            if C is not None:
+                return C
+            apx = _to_float(row.get("apx"))
+            LB1 = _to_float(row.get("LB1"))
+            bound = _to_float(row.get("best_bound"))
+            if apx is None:
+                return None
+            if LB1 is not None and LB1 > 0:
+                return apx * LB1
+            if bound is not None and bound > 0:
+                return apx * bound
+            return None
+
+        # baseline auto
+        if baseline == "auto":
+            pref = ["heuristic", "heuristic+1move", "heuristic+vnd", "heuristic+1move+vnd"]
+            avail = sorted(set(r["algo"] for r in rows if r.get("algo")))
+            chosen = next((p for p in pref if p in avail), None)
+            if chosen is None:
+                from collections import Counter
+                cnt = Counter(r["algo"] for r in rows if r.get("algo"))
+                chosen = cnt.most_common(1)[0][0] if cnt else None
+            baseline = chosen
+
+        if not baseline:
+            Path(out_png).with_suffix(".debug.txt").write_text("[Q14] baseline non determinata\n", encoding="utf-8")
+            _render_no_data(out_png, "Q14: baseline mancante")
+            return
+
+        # mappa (istanza, algo) -> riga
+        per_key = {(r.get("instance_name"), r.get("algo")): r for r in rows if r.get("instance_name")}
+        instances = sorted(set(r.get("instance_name") for r in rows if r.get("instance_name")))
+        algos_all = sorted(set(r.get("algo") for r in rows if r.get("algo")))
+
+        # ΔC% per algoritmo
+        per_algo_vals = {}
+        used_instances = 0
+        for inst in instances:
+            b_row = per_key.get((inst, baseline))
+            Cb = _C_of(b_row)
+            if Cb is None or Cb == 0:
+                continue
+            used_instances += 1
+            for algo in algos_all:
+                a_row = per_key.get((inst, algo))
+                Ca = _C_of(a_row)
+                if Ca is None:
+                    continue
+                dperc = 100.0 * (Ca - Cb) / Cb
+                per_algo_vals.setdefault(algo, []).append(dperc)
+
+        # DEBUG: istanze per algoritmo + riepilogo
+        dbg_path = Path(out_png).with_suffix(".debug.txt")
+        try:
+            dbg_map = {}
+            for rr in rows:
+                dbg_map.setdefault(rr["algo"], set()).add(rr.get("instance_name"))
+            with open(dbg_path, "w", encoding="utf-8") as f:
+                f.write(f"[Q14] baseline: {baseline}\n")
+                f.write(f"[Q14] istanze con baseline valida: {used_instances}\n")
+                f.write("[Q14] istanze per algoritmo:\n")
+                for a in sorted(dbg_map):
+                    f.write(f"  - {a}: {sorted(x for x in dbg_map[a] if x)}\n")
+                for a in sorted(per_algo_vals):
+                    f.write(f"[Q14] {a}: n={len(per_algo_vals[a])}\n")
+        except Exception:
+            pass
+
+        if not per_algo_vals or all(len(v) == 0 for v in per_algo_vals.values()):
+            _render_no_data(out_png, "Q14: nessun confronto valido")
+            return
+
+        # plot
+        fig, ax = plt.subplots(figsize=(10, 5))
+        algos_plot = sorted(per_algo_vals.keys())
+        boxdata = [per_algo_vals[a] for a in algos_plot]
+        if not boxdata:
+            _render_no_data(out_png, "Q14: nessun dato da plottare")
+            return
+
+        ax.boxplot(boxdata, labels=algos_plot, patch_artist=False)
+        ax.axhline(0.0, linestyle="--", linewidth=1)
+        ax.set_ylabel("ΔC% vs baseline")
+        ax.set_title(f"Q14 — Miglioramento vs baseline ({baseline}) – valori < 0% = meglio")
+        fig.tight_layout()
+        Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+
+    except Exception as e:
+        Path(out_png).with_suffix(".debug.txt").write_text(f"[Q14] eccezione: {e}\n", encoding="utf-8")
+        _render_no_data(out_png, f"Q14 error: {e}")
+
+# ============ Q15 ============
+def plot_q15_balance_tradeoff(metrics_source, out_png, include="all", y="apx", x_balance="range"):
+    try:
+        data = _collect_metrics(metrics_source, include=include)
+        if not data:
+            Path(out_png).with_suffix(".debug.txt").write_text("[Q15] nessun dato\n", encoding="utf-8")
+            _render_no_data(out_png, "Q15: dati mancanti")
+            return
+
+        # proxy: gap_final (%) sull'asse X
+        for d in data:
+            apx_val = _to_float(d.get("apx"))
+            if d.get("gap_final") is None and apx_val is not None:
+                d["gap_final"] = (apx_val - 1.0) * 100.0
+
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(10, 5))
+        algos = sorted(set(d["algo"] for d in data))
+        any_point = False
+        for algo in algos:
+            xs = [d.get("gap_final") for d in data if d["algo"] == algo and d.get("gap_final") is not None and d.get(y) is not None]
+            ys = [d.get(y) for d in data if d["algo"] == algo and d.get("gap_final") is not None and d.get(y) is not None]
+            if xs and ys:
+                any_point = True
+                ax.scatter(xs, ys, label=algo, s=15)
+        if not any_point:
+            Path(out_png).with_suffix(".debug.txt").write_text("[Q15] nessun punto valido\n", encoding="utf-8")
+            _render_no_data(out_png, "Q15: nessun punto valido")
+            return
+        ax.set_xlabel("Sbilanciamento proxy (%) – gap_final")
+        ax.set_ylabel("APX" if y == "apx" else y)
+        ax.set_title("Q15 — Trade-off qualità vs bilanciamento (proxy)")
+        ax.legend(loc="best", frameon=False)
+        fig.tight_layout()
+        Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+    except Exception as e:
+        Path(out_png).with_suffix(".debug.txt").write_text(f"[Q15] eccezione: {e}\n", encoding="utf-8")
+        _render_no_data(out_png, f"Q15 error: {e}")
+
+
+# ============ Q16 ============
+# ===================== Q16 (drop-in) =====================
+def plot_q16_gap_vs_size(metrics_source, out_png, include="all"):
+    try:
+        data = _collect_metrics(metrics_source, include=include)
+        if not data:
+            _render_no_data(out_png, "Q16: nessun dato")
+            return
+
+        bins = _size_bins_auto([d["n_tasks"] for d in data], k=3)
+
+        # proxy gap_final (%) se mancante
+        for d in data:
+            apx_val = _to_float(d.get("apx"))
+            if d.get("gap_final") is None and apx_val is not None:
+                d["gap_final"] = (apx_val - 1.0) * 100.0
+
+        by_key = {}
+        algos = sorted(set(d["algo"] for d in data))
+        for d in data:
+            bname = _assign_bin(d["n_tasks"], bins)
+            key = (bname, d["algo"])
+            if d.get("gap_final") is None:
+                continue
+            by_key.setdefault(key, []).append(d["gap_final"])
+
+        bins_order = [b[2] for b in bins]
+        fig, ax = plt.subplots(figsize=(10, 5))
+        width = 0.8 / max(1, len(algos))
+        positions, boxdata = [], []
+
+        for ai, algo in enumerate(algos):
+            for bi, bname in enumerate(bins_order):
+                vals = by_key.get((bname, algo), [])
+                if not vals:
+                    continue
+                x = bi + (ai - (len(algos)-1)/2) * width
+                positions.append(x)
+                boxdata.append(vals)
+
+        if not boxdata:
+            _render_no_data(out_png, "Q16: nessun dato valido")
+            return
+
+        ax.boxplot(boxdata, positions=positions, widths=width, patch_artist=False, manage_ticks=False)
+        ax.set_xticks(range(len(bins_order)))
+        ax.set_xticklabels(bins_order)
+        ax.set_xlabel("|T| bins")
+        ax.set_ylabel("Gap finale (%)")
+        ax.set_title("Q16 — Gap finale vs dimensione")
+        # niente legend “vuota”
+        fig.tight_layout()
+        Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_png, dpi=150)
+        plt.close(fig)
+    except Exception as e:
+        _render_no_data(out_png, f"Q16 error: {e}")

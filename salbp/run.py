@@ -34,9 +34,55 @@ from salbp.plots_quality import (
     plot_q3_success_rate,
     plot_q4_runtime_ecdf,
     plot_q5_apx_vs_runtime,
+    plot_q12_apx_vs_size_candles,
+    plot_q13_apx_vs_size_scatter,
+    plot_q14_improvement_vs_baseline,
+    plot_q15_balance_tradeoff,
+    plot_q16_gap_vs_size,
 )
 
 from salbp.vnd import vnd_search  # VND metaeuristica
+
+# === PATCH 4.1: _safe_plot che garantisce SEMPRE un file in uscita ===
+def _safe_plot(fn, name, outdir):
+    from pathlib import Path
+    outdir = Path(outdir)
+    png = outdir / f"{name}.png"
+    dbg = outdir / f"{name}.debug.txt"
+
+    try:
+        fn()  # prova a generare il grafico reale
+    except Exception as e:
+        import traceback
+        outdir.mkdir(parents=True, exist_ok=True)
+        try:
+            dbg.write_text(
+                f"Eccezione durante {name}:\n{traceback.format_exc()}",
+                encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    # Se la funzione non ha creato il PNG (es. nessun dato), crea un placeholder e un debug
+    if not png.exists():
+        try:
+            outdir.mkdir(parents=True, exist_ok=True)
+            with open(dbg, "a", encoding="utf-8") as f:
+                f.write("Nessun file PNG prodotto dalla funzione: probabile assenza dati (run_metrics_*.csv).\n")
+                f.write("Controlla che sotto l'outdir esistano i CSV con colonne: "
+                        "'formulation', 'n_tasks', 'apx'/'apx_lb1'/'apx_bound', 'runtime', 'LB1', 'best_bound'.\n")
+            import matplotlib.pyplot as plt
+            plt.figure(figsize=(8, 4), dpi=150)
+            plt.text(0.5, 0.55, f"{name}", ha="center", va="center", fontsize=12)
+            plt.text(0.5, 0.4, "Nessun dato disponibile\n(placeholder generato da _safe_plot)",
+                     ha="center", va="center", fontsize=10)
+            plt.axis("off")
+            plt.tight_layout()
+            plt.savefig(png, bbox_inches="tight")
+            plt.close()
+        except Exception:
+            # come ultimissima difesa, almeno evita di esplodere
+            pass
 
 
 def resolve_tasks_path(raw: str) -> Path:
@@ -420,6 +466,16 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
             "LB1": LB1,
         })
 
+        # --- NEW: salva anche gap_final (in %) per PLI ---
+        gap_final = None
+        try:
+            if getattr(m, "MIPGap", None) is not None:
+                gap_final = 100.0 * float(m.MIPGap)  # percentuale
+        except Exception:
+            pass
+        row["gap_final"] = gap_final
+
+
         # normalizzo best bound (può essere None/nan)
         best_bound = row.get("bound", None)
         try:
@@ -518,6 +574,33 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
             # NEW: Q5 – APX vs Runtime (tutti gli algoritmi presenti)
             plot_q5_apx_vs_runtime(metrics_source=base, out_png=str(compare_dir / "Q5_apx_vs_runtime.png"),
                                    include="all", cap_sec=args.time_limit, logx=False, annotate=False)
+            # === PATCH 4: Q12..Q16 ognuno protetto ===
+            _safe_plot(lambda: plot_q12_apx_vs_size_candles(metrics_source=base,
+                                                            out_png=str(compare_dir / "Q12_apx_vs_size_candles.png"),
+                                                            include="all"),
+                       "Q12_apx_vs_size_candles", compare_dir)
+
+            _safe_plot(lambda: plot_q13_apx_vs_size_scatter(metrics_source=base,
+                                                            out_png=str(compare_dir / "Q13_apx_vs_size_scatter.png"),
+                                                            include="all"),
+                       "Q13_apx_vs_size_scatter", compare_dir)
+
+            _safe_plot(lambda: plot_q14_improvement_vs_baseline(metrics_source=base,
+                                                                out_png=str(
+                                                                    compare_dir / "Q14_improvement_vs_baseline.png"),
+                                                                baseline="heuristic"),
+                       "Q14_improvement_vs_baseline", compare_dir)
+
+            _safe_plot(lambda: plot_q15_balance_tradeoff(metrics_source=base,
+                                                         out_png=str(compare_dir / "Q15_tradeoff_balance.png"),
+                                                         include="all", y="apx", x_balance="range"),
+                       "Q15_tradeoff_balance", compare_dir)
+
+            _safe_plot(lambda: plot_q16_gap_vs_size(metrics_source=base,
+                                                    out_png=str(compare_dir / "Q16_gap_vs_size.png"),
+                                                    include="all"),
+                       "Q16_gap_vs_size", compare_dir)
+
 
 
 
@@ -642,6 +725,19 @@ def solve_heuristic_only(inst, args, outdir: Path):
     outdir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.perf_counter()  # ⬅️ start timer
+
+    def _to_float_local(x):
+        try:
+            if x is None or x == "" or str(x).lower() in ("none", "nan"):
+                return None
+            return float(x)
+        except Exception:
+            try:
+                return float(str(x).replace(",", "."))
+            except Exception:
+                return None
+
+    t0 = time.perf_counter()
 
 
     if args.heuristic == "targetC-bestfit":
@@ -945,6 +1041,14 @@ def solve_heuristic_only(inst, args, outdir: Path):
         })
         row["apx"] = row["apx_lb1"]
 
+        # --- NEW: gap_final euristiche = 100 * (APX - 1) ---
+        try:
+            apx_val = _to_float_local(row.get("apx"))
+        except Exception:
+            apx_val = None
+        gap_final = (apx_val - 1.0) * 100.0 if (apx_val is not None) else None
+        row["gap_final"] = gap_final
+
         save_run_metrics_per_formulation(Path(args.outdir), tag, row)
         # --- TOP-LEVEL MIRROR per Q4 anche per heuristic-only ---
         try:
@@ -1023,6 +1127,34 @@ def solve_heuristic_only(inst, args, outdir: Path):
             # NEW: Q5 – APX vs Runtime (anche per le euristiche)
             plot_q5_apx_vs_runtime(metrics_source=base, out_png=str(compare_dir / "Q5_apx_vs_runtime.png"),
                                    include="all", cap_sec=args.time_limit, logx=False, annotate=False)
+            # === PATCH 4: Q12..Q16 ognuno protetto ===
+            _safe_plot(lambda: plot_q12_apx_vs_size_candles(metrics_source=base,
+                                                            out_png=str(compare_dir / "Q12_apx_vs_size_candles.png"),
+                                                            include="all"),
+                       "Q12_apx_vs_size_candles", compare_dir)
+
+            _safe_plot(lambda: plot_q13_apx_vs_size_scatter(metrics_source=base,
+                                                            out_png=str(compare_dir / "Q13_apx_vs_size_scatter.png"),
+                                                            include="all"),
+                       "Q13_apx_vs_size_scatter", compare_dir)
+
+            _safe_plot(lambda: plot_q14_improvement_vs_baseline(metrics_source=base,
+                                                                out_png=str(
+                                                                    compare_dir / "Q14_improvement_vs_baseline.png"),
+                                                                baseline="auto"),
+                       "Q14_improvement_vs_baseline", compare_dir)
+
+            _safe_plot(lambda: plot_q15_balance_tradeoff(metrics_source=base,
+                                                         out_png=str(compare_dir / "Q15_tradeoff_balance.png"),
+                                                         include="all", y="apx", x_balance="range"),
+                       "Q15_tradeoff_balance", compare_dir)
+
+            _safe_plot(lambda: plot_q16_gap_vs_size(metrics_source=base,
+                                                    out_png=str(compare_dir / "Q16_gap_vs_size.png"),
+                                                    include="all"),
+                       "Q16_gap_vs_size", compare_dir)
+
+
 
         except Exception as _eQ:
             print(f"[WARN] plot non salvati: {_eQ}")
@@ -1152,7 +1284,32 @@ def main():
             # Q5 – APX vs Runtime (solo PLI)
             plot_q5_apx_vs_runtime(metrics_source=base, out_png=str(compare_dir / "Q5_apx_vs_runtime.png"),
                                    include="pli", cap_sec=args.time_limit, logx=False, annotate=False)
+            # === PATCH 4: Q12..Q16 ognuno protetto anche in 'both' ===
+            _safe_plot(lambda: plot_q12_apx_vs_size_candles(metrics_source=base,
+                                                            out_png=str(compare_dir / "Q12_apx_vs_size_candles.png"),
+                                                            include="all"),
+                       "Q12_apx_vs_size_candles", compare_dir)
 
+            _safe_plot(lambda: plot_q13_apx_vs_size_scatter(metrics_source=base,
+                                                            out_png=str(compare_dir / "Q13_apx_vs_size_scatter.png"),
+                                                            include="all"),
+                       "Q13_apx_vs_size_scatter", compare_dir)
+
+            _safe_plot(lambda: plot_q14_improvement_vs_baseline(metrics_source=base,
+                                                                out_png=str(
+                                                                    compare_dir / "Q14_improvement_vs_baseline.png"),
+                                                                baseline="auto"),
+                       "Q14_improvement_vs_baseline", compare_dir)
+
+            _safe_plot(lambda: plot_q15_balance_tradeoff(metrics_source=base,
+                                                         out_png=str(compare_dir / "Q15_tradeoff_balance.png"),
+                                                         include="all", y="apx", x_balance="range"),
+                       "Q15_tradeoff_balance", compare_dir)
+
+            _safe_plot(lambda: plot_q16_gap_vs_size(metrics_source=base,
+                                                    out_png=str(compare_dir / "Q16_gap_vs_size.png"),
+                                                    include="all"),
+                       "Q16_gap_vs_size", compare_dir)
 
 
         except Exception as _eQ:
