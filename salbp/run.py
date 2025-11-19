@@ -28,7 +28,7 @@ from salbp.plots_heuristic import (
     plot_h8_deltaC_by_phase,
     plot_h11_tradeoff,
 )
-from salbp.plots_quality import plot_q1_apx_box, plot_q2_apx_ecdf, plot_q3_success_rate
+from salbp.plots_quality import plot_q1_apx_box, plot_q2_apx_ecdf, plot_q3_success_rate, plot_q4_runtime_ecdf
 
 from salbp.vnd import vnd_search  # VND metaeuristica
 
@@ -52,7 +52,10 @@ def resolve_tasks_path(raw: str) -> Path:
 
 
 def solve_and_report(model, inst, args, outdir: Path, tag: str):
+    import time
     outdir.mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()      # ← start timer “end-to-end”
+
 
     logger = ProgressLogger() if not getattr(args, "no_cb", False) else None
     sol = model.solve(time_limit=args.time_limit,
@@ -387,13 +390,14 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
     except Exception:
         loads = []
     try:
+        runtime_total = time.perf_counter() - t0  # ← include solver + 1-move + VND
         row = build_run_summary(
             formulation=tag,
             instance_name=Path(args.tasks).name,
             loads=loads,
             obj_C=sol.C,
             bound=float(getattr(m, "ObjBound", float("nan"))) if getattr(m, "SolCount", 0) else None,
-            runtime=float(getattr(m, "Runtime", 0.0)),
+            runtime=runtime_total,  # ← salva il tempo totale
             nodes=int(getattr(m, "NodeCount", 0)),
         )
 
@@ -428,20 +432,60 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
         row["apx"] = apx_bound if apx_bound is not None else apx_lb1
 
         save_run_metrics_per_formulation(Path(args.outdir), tag, row)
+        # --- TOP-LEVEL MIRROR per Q4: crea/aggiorna <outdir>/run_metrics_<tag>.csv con 'runtime' ---
+        try:
+            import csv as _csv
+            top_csv = Path(args.outdir) / f"run_metrics_{tag}.csv"
+            # (ri)crea header se manca o se non contiene 'runtime'
+            need_header = True
+            if top_csv.exists():
+                try:
+                    with open(top_csv, "r", encoding="utf-8") as _f:
+                        head = _f.readline()
+                        need_header = ("runtime" not in head)
+                except Exception:
+                    need_header = True
+            mode = "a"
+            if need_header:
+                mode = "w"
+            with open(top_csv, mode, newline="", encoding="utf-8") as _f:
+                w = _csv.DictWriter(_f, fieldnames=list(row.keys()))
+                if need_header:
+                    w.writeheader()
+                w.writerow(row)
+        except Exception as _eTop:
+            print(f"[WARN] mirror top-level metrics non scritto: {_eTop}")
 
-        # --- FALLBACK: crea sempre un run_metrics_<tag>.csv in <outdir>/<tag>/ ---
+
+        # --- SCRITTURA CERTA: run_metrics_<tag>.csv sempre con header aggiornato (include 'runtime') ---
         try:
             import csv as _csv
             _metrics_dir = Path(args.outdir) / tag
             _metrics_dir.mkdir(parents=True, exist_ok=True)
             _csv_path = _metrics_dir / f"run_metrics_{tag}.csv"
-            if not _csv_path.exists():
+
+            # Se il file non esiste o l'header NON contiene 'runtime', riscrivi l'header
+            rewrite_header = True
+            if _csv_path.exists():
+                try:
+                    with open(_csv_path, "r", encoding="utf-8") as _f:
+                        header = _f.readline()
+                        rewrite_header = ("runtime" not in header)
+                except Exception:
+                    rewrite_header = True
+
+            if rewrite_header:
                 with open(_csv_path, "w", newline="", encoding="utf-8") as _f:
                     w = _csv.DictWriter(_f, fieldnames=list(row.keys()))
                     w.writeheader()
-                    w.writerow(row)
+
+            # accoda SEMPRE la riga corrente con lo schema attuale (che ha 'runtime')
+            with open(_csv_path, "a", newline="", encoding="utf-8") as _f:
+                w = _csv.DictWriter(_f, fieldnames=list(row.keys()))
+                w.writerow(row)
+
         except Exception as _ef:
-            print(f"[WARN] fallback metrics csv non salvato: {_ef}")
+            print(f"[WARN] run_metrics csv non salvato/aggiornato: {_ef}")
 
         # ⬇️ NUOVO: Q1 + Q2 quality plots aggregati sull'outdir
         try:
@@ -452,14 +496,17 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
             # sempre in compare
             plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
             plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
-            # NEW: Q3 success rate (tau=1.01 modificabile)
             plot_q3_success_rate(metrics_source=base, out_png=str(compare_dir / "Q3_success_rate.png"), tau=1.01,
                                  include="all")
+            # NEW: Q4 – ECDF runtime (cap ai time-limit se presenti)
+            plot_q4_runtime_ecdf(metrics_source=base, out_png=str(compare_dir / "Q4_runtime_ecdf.png"),
+                                 include="all", cap_sec=args.time_limit, logx=False)
+
 
 
 
         except Exception as _eQ:
-            print(f"[WARN] Q1/Q2 plot non salvati: {_eQ}")
+            print(f"[WARN] plot non salvati: {_eQ}")
 
 
     except Exception as e:
@@ -570,8 +617,12 @@ def _field(row, name, default=None):
 
 
 def solve_heuristic_only(inst, args, outdir: Path):
+    import time  # ⬅️ aggiungi
     from salbp.constructive import construct_targetC
     outdir.mkdir(parents=True, exist_ok=True)
+
+    t0 = time.perf_counter()  # ⬅️ start timer
+
 
     if args.heuristic == "targetC-bestfit":
         print("[HEUR] Costruttiva: Target-C (bestfit)")
@@ -845,14 +896,15 @@ def solve_heuristic_only(inst, args, outdir: Path):
         elif getattr(args, "post_vnd", False):
             tag = "heuristic+vnd"
 
-        # row base (runtime/nodes non disponibili: mettiamo None)
+        heur_runtime = time.perf_counter() - t0  # ⬅️ end timer
+
         row = build_run_summary(
             formulation=tag,
             instance_name=Path(getattr(args, "tasks")).name,
             loads=loads,
             obj_C=C,
-            bound=None,  # nessun best-bound da solver in heuristic-only
-            runtime=None,
+            bound=None,  # nessun best-bound in heuristic-only
+            runtime=heur_runtime,  # ⬅️ salva il runtime
             nodes=None,
         )
 
@@ -874,20 +926,57 @@ def solve_heuristic_only(inst, args, outdir: Path):
         row["apx"] = row["apx_lb1"]
 
         save_run_metrics_per_formulation(Path(args.outdir), tag, row)
+        # --- TOP-LEVEL MIRROR per Q4 anche per heuristic-only ---
+        try:
+            import csv as _csv
+            top_csv = Path(args.outdir) / f"run_metrics_{tag}.csv"
+            need_header = True
+            if top_csv.exists():
+                try:
+                    with open(top_csv, "r", encoding="utf-8") as _f:
+                        head = _f.readline()
+                        need_header = ("runtime" not in head)
+                except Exception:
+                    need_header = True
+            mode = "a"
+            if need_header:
+                mode = "w"
+            with open(top_csv, mode, newline="", encoding="utf-8") as _f:
+                w = _csv.DictWriter(_f, fieldnames=list(row.keys()))
+                if need_header:
+                    w.writeheader()
+                w.writerow(row)
+        except Exception as _eTop:
+            print(f"[WARN] mirror top-level metrics non scritto (heuristic): {_eTop}")
 
-        # --- FALLBACK: come sopra, ma per heuristic-only ---
+
+        # --- SCRITTURA CERTA anche per heuristic-only (header allineato con 'runtime') ---
         try:
             import csv as _csv
             _metrics_dir = Path(args.outdir) / tag
             _metrics_dir.mkdir(parents=True, exist_ok=True)
             _csv_path = _metrics_dir / f"run_metrics_{tag}.csv"
-            if not _csv_path.exists():
+
+            rewrite_header = True
+            if _csv_path.exists():
+                try:
+                    with open(_csv_path, "r", encoding="utf-8") as _f:
+                        header = _f.readline()
+                        rewrite_header = ("runtime" not in header)
+                except Exception:
+                    rewrite_header = True
+
+            if rewrite_header:
                 with open(_csv_path, "w", newline="", encoding="utf-8") as _f:
                     w = _csv.DictWriter(_f, fieldnames=list(row.keys()))
                     w.writeheader()
-                    w.writerow(row)
+
+            with open(_csv_path, "a", newline="", encoding="utf-8") as _f:
+                w = _csv.DictWriter(_f, fieldnames=list(row.keys()))
+                w.writerow(row)
+
         except Exception as _ef:
-            print(f"[WARN] fallback metrics csv non salvato (heuristic): {_ef}")
+            print(f"[WARN] run_metrics csv non salvato/aggiornato (heuristic): {_ef}")
 
         # Q1 + Q2 per tutto l'outdir (confronto heuristic / heuristic+vnd / ecc)
         try:
@@ -898,9 +987,12 @@ def solve_heuristic_only(inst, args, outdir: Path):
             # salva SEMPRE in compare/
             plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
             plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
-            # NEW: Q3 anche per heuristic-only
             plot_q3_success_rate(metrics_source=base, out_png=str(compare_dir / "Q3_success_rate.png"), tau=1.01,
                                  include="all")
+            # NEW: Q4 – ECDF runtime (cap al time-limit se lo hai impostato)
+            plot_q4_runtime_ecdf(metrics_source=base, out_png=str(compare_dir / "Q4_runtime_ecdf.png"),
+                                 include="all", cap_sec=args.time_limit, logx=False)
+
 
         except Exception as _eQ:
             print(f"[WARN] Q1/Q2 plot non salvati: {_eQ}")
@@ -1021,9 +1113,13 @@ def main():
         try:
             plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
             plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
-            # NEW: Q3 success rate
             plot_q3_success_rate(metrics_source=base, out_png=str(compare_dir / "Q3_success_rate.png"), tau=1.01,
                                  include="all")
+            # Q4 – ECDF runtime (solo PLI: y, prefix)
+            plot_q4_runtime_ecdf(metrics_source=base, out_png=str(compare_dir / "Q4_runtime_ecdf.png"),
+                                 include="pli", cap_sec=args.time_limit, logx=False)
+
+
         except Exception as _eQ:
             print(f"[WARN] Q1/Q2/Q3 plot non salvati (fase finale): {_eQ}")
 

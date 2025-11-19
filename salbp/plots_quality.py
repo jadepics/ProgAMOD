@@ -334,3 +334,188 @@ def plot_q3_success_rate(metrics_source, out_png, tau=1.01, include="all"):
     plt.savefig(out_png, bbox_inches="tight")
     plt.close()
 
+
+def _iter_metric_rows(csv_path: Path):
+    """Itera TUTTE le righe di un CSV metriche come dict (pandas se presente, altrimenti csv.DictReader)."""
+    # pandas
+    if pd is not None:
+        try:
+            df = pd.read_csv(csv_path)
+            # normalizza NaN -> None
+            for _, r in (df if df is not None else []).iterrows():
+                d = {}
+                for k, v in r.to_dict().items():
+                    try:
+                        # mantieni stringhe così come sono; NaN -> None
+                        if v is None or (hasattr(v, "is_nan") and v.is_nan()) or (isinstance(v, float) and np.isnan(v)):
+                            d[k] = None
+                        else:
+                            d[k] = v
+                    except Exception:
+                        d[k] = v
+                yield d
+            return
+        except Exception:
+            pass
+    # csv stdlib
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            rd = csv.DictReader(f)
+            for r in rd:
+                yield r
+    except Exception:
+        return
+
+def plot_q4_runtime_ecdf(metrics_source, out_png, include="all", cap_sec=None, logx=False):
+    """
+    Q4 – ECDF dei tempi di esecuzione (runtime) per algoritmo/formulazione.
+
+    Robusta:
+      - scansiona: run_metrics_*.csv, metrics*.csv, *summary*.csv, *.metrics.csv (ricorsivo)
+      - legge TUTTE le righe
+      - accetta alias per 'runtime' (runtime, runtime_total, time, elapsed, wall_time, solver_runtime, model_runtime,
+        e perfino 'Runtime (s)')
+      - scrive un file di debug <out_png>.debug.txt se non trova dati
+    """
+    from itertools import cycle
+    base = Path(metrics_source)
+    groups = defaultdict(list)
+
+    # 1) trova CSV candidati
+    patterns = ["run_metrics_*.csv", "metrics*.csv", "*summary*.csv", "*.metrics.csv"]
+    cand = []
+    for pat in patterns:
+        cand.extend(base.rglob(pat))
+    # dedup mantendendo l'ordine
+    seen = set()
+    csv_files = []
+    for p in cand:
+        if p.suffix.lower() == ".csv" and p not in seen:
+            seen.add(p)
+            csv_files.append(p)
+
+    # 2) raccogli runtime da tutte le righe
+    aliases = {
+        "runtime", "runtime_total", "time", "elapsed", "wall_time",
+        "solver_runtime", "model_runtime", "runtime(s)", "runtime_sec", "seconds"
+    }
+
+    scanned = []  # per debug
+
+    for csv_path in csv_files:
+        # leggi tutte le righe
+        for row in _iter_metric_rows(csv_path):
+            # normalizza chiavi
+            norm = {}
+            for k, v in (row or {}).items():
+                kk = (k or "").strip().lower()
+                kk = kk.replace(" ", "").replace("\t", "").replace("(s)", "s")
+                norm[kk] = v
+
+            # gruppo: preferisci 'formulation'/'tag', altrimenti nome cartella
+            g = (row.get("formulation") or row.get("tag") or csv_path.parent.name)
+            g = str(g)
+
+            # runtime: usa alias
+            rt = None
+            for key in aliases:
+                if key in norm:
+                    rt = _as_float(norm.get(key))
+                    if rt is not None:
+                        break
+
+            # se non trovato, prova proprio 'runtime' non normalizzato
+            if rt is None:
+                rt = _as_float(row.get("runtime"))
+
+            # cap al time-limit (se dato)
+            if rt is not None and cap_sec is not None:
+                try:
+                    rt = min(rt, float(cap_sec))
+                except Exception:
+                    pass
+
+            if rt is not None:
+                groups[g].append(rt)
+
+        scanned.append((csv_path, list((row or {}).keys())))
+
+    # 3) filtro include
+    pli_set = {"y", "prefix"}
+    if include == "pli":
+        groups = {g: v for g, v in groups.items() if g in pli_set}
+    elif isinstance(include, (set, list, tuple)):
+        groups = {g: v for g, v in groups.items() if g in include}
+
+    # 4) plot (o debug)
+    Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+    if not groups:
+        # scrivi un file di debug accanto al PNG
+        dbg = Path(out_png).with_suffix(".debug.txt")
+        try:
+            with open(dbg, "w", encoding="utf-8") as f:
+                f.write(f"Q4 DEBUG – Nessun runtime trovato in: {base}\n")
+                f.write("CSV ispezionati e intestazioni viste:\n")
+                for p, cols in scanned:
+                    f.write(f"- {p} -> {cols}\n")
+        except Exception:
+            pass
+
+        plt.figure(figsize=(9, 4))
+        plt.text(0.5, 0.6, "Nessun runtime disponibile per Q4", ha="center", va="center", fontsize=14)
+        plt.text(0.5, 0.35, f"Vedi file di debug:\n{dbg.name}", ha="center", va="center", fontsize=10)
+        plt.axis("off")
+        plt.savefig(out_png, bbox_inches="tight")
+        plt.close()
+        return
+
+    _palette = {
+        "prefix": "tab:blue",
+        "y": "tab:orange",
+        "heuristic": "tab:green",
+        "heuristic+1move": "tab:purple",
+        "heuristic+vnd": "tab:red",
+        "heuristic+1move+vnd": "tab:brown",
+    }
+    _markers = cycle(["o", "s", "D", "^", "v", "P", "X"])
+
+    order = sorted(groups.keys(), key=lambda k: np.median(groups[k]))
+    x_all = []
+
+    plt.figure(figsize=(12, 6))
+    for g in order:
+        vals = groups[g]
+        x = np.sort(np.asarray(vals, dtype=float))
+        x_all.extend(x.tolist())
+        color = _palette.get(g, None)
+        marker = next(_markers)
+
+        if len(x) == 1:
+            plt.vlines(x[0], 0.0, 1.0, linestyles="-", colors=color, label=g, linewidth=2)
+            plt.scatter([x[0]], [1.0], s=35, color=color, edgecolors="white",
+                        linewidths=0.7, marker=marker, zorder=3)
+        else:
+            y = np.arange(1, len(x) + 1) / len(x)
+            xs = np.r_[x[0], x]
+            ys = np.r_[0.0, y]
+            plt.step(xs, ys, where="post", label=g, color=color, linewidth=2)
+            plt.scatter(x, y, s=25, color=color, edgecolors="white",
+                        linewidths=0.5, marker=marker, zorder=3)
+
+    if logx:
+        plt.xscale("log")
+
+    if x_all:
+        xmin, xmax = float(min(x_all)), float(max(x_all))
+        pad = max(1e-3, 0.01 * (xmax - xmin))
+        plt.xlim(max(1e-6, xmin - pad), xmax + pad)
+
+    plt.ylim(0.0, 1.0)
+    plt.xlabel("Tempo di esecuzione (s)")
+    plt.ylabel("Quota con runtime ≤ t")
+    plt.title("Q4 – ECDF dei runtime per algoritmo")
+    plt.grid(True, ls=":", alpha=0.4)
+    plt.legend(loc="lower right")
+    plt.tight_layout()
+    plt.savefig(out_png, bbox_inches="tight")
+    plt.close()

@@ -26,8 +26,22 @@ targetC-lpt
 --vnd-tie
 var
 --outdir
-outputs/SCHOLL/merdosa_bestfit_step500_vnd
+outputs/SCHOLL/qualita
 --log
+
+
+  --tasks salbp/examples/SCHOLL.csv
+  --stations 25
+  --heuristic-only
+  --heuristic targetC-rpw
+  --target-eps-step 700
+  --post-1move
+  --ls-secs 180
+  --ls-accept-equal
+  --ls-tie var
+  --ls-report
+  --outdir outputs/SCHOLL/qualita
+  --log
 
 
 Questo comando funziona e fa 5 iterazioni, genera grafici con piu dettaglio
@@ -70,5 +84,5 @@ both
 --vnd-tie
 var
 --outdir
-outputs/SCHOLL/pli_y_vnd
+outputs/SCHOLL/qualita
 --log
