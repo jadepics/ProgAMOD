@@ -519,3 +519,168 @@ def plot_q4_runtime_ecdf(metrics_source, out_png, include="all", cap_sec=None, l
     plt.tight_layout()
     plt.savefig(out_png, bbox_inches="tight")
     plt.close()
+
+
+# === sostituisci TUTTO il corpo di plot_q5_apx_vs_runtime con questo ===
+def plot_q5_apx_vs_runtime(metrics_source,
+                           out_png,
+                           include="all",
+                           cap_sec=None,
+                           logx=False,
+                           annotate=False):
+    import os, glob, re, csv, math
+    import matplotlib.pyplot as plt
+
+    def _list_csvs(root):
+        pats = [
+            os.path.join(str(root), "run_metrics_*.csv"),
+            os.path.join(str(root), "*", "run_metrics_*.csv"),
+        ]
+        files = []
+        for p in pats:
+            files += glob.glob(p)
+        return sorted(set(files))
+
+    def _get(row, *names):
+        # lookup case-insensitive su più alias
+        low = {k.lower(): k for k in row.keys()}
+        for nm in names:
+            k = low.get(nm.lower())
+            if k is not None:
+                return row.get(k)
+        return None
+
+    def _to_float(x):
+        try:
+            if x is None or str(x).strip() == "":
+                return float("nan")
+            return float(str(x).replace(",", "."))
+        except Exception:
+            return float("nan")
+
+    files = _list_csvs(metrics_source)
+    print(f"[Q5] metrics_source={metrics_source}  trovati {len(files)} file:")
+    for f in files:
+        try:
+            sz = os.path.getsize(f)
+        except Exception:
+            sz = -1
+        print(f"[Q5]   - {f}  size={sz}")
+
+    points = []  # (algo, instance, runtime, apx)
+
+    for fp in files:
+        try:
+            with open(fp, "r", encoding="utf-8") as fh:
+                rd = csv.DictReader(fh)
+                rows = list(rd)
+        except Exception as e:
+            print(f"[Q5] skip {fp}: {e}")
+            continue
+
+        # algoritmo dal CSV o dal filename
+        m = re.search(r"run_metrics_([^/\\]+)\.csv$", fp)
+        algo_from_file = m.group(1) if m else "unknown"
+
+        for r in rows:
+            algo = (_get(r, "formulation") or algo_from_file).strip()
+
+            instance = _get(r, "instance_name", "instance")
+            instance = str(instance).strip() if instance is not None else "?"
+
+            # runtime (vari alias)
+            runtime = None
+            for nm in ("runtime", "runtime_sec", "time", "secs", "seconds"):
+                v = _get(r, nm)
+                if v is not None:
+                    runtime = _to_float(v)
+                    break
+            if runtime is None:
+                runtime = float("nan")
+            if cap_sec is not None and runtime == runtime:  # not NaN
+                runtime = min(runtime, float(cap_sec))
+
+            # APX (apx|apx_bound|apx_lb1) oppure ricalcolo C/LB
+            apx = None
+            for nm in ("apx", "apx_bound", "apx_lb1"):
+                v = _get(r, nm)
+                if v is not None:
+                    apx = _to_float(v)
+                    break
+            if apx is None or not (apx == apx):  # NaN
+                C = _to_float(_get(r, "obj_C", "C", "obj_c"))
+                best_bound = _to_float(_get(r, "best_bound"))
+                LB1 = _to_float(_get(r, "LB1", "lb1"))
+                denom = None
+                if best_bound == best_bound and best_bound > 0:
+                    denom = best_bound
+                elif LB1 == LB1 and LB1 > 0:
+                    denom = LB1
+                apx = (C / denom) if (denom and C == C) else float("nan")
+
+            points.append((algo, instance, runtime, apx))
+
+    # filtro include
+    keep_sets = {
+        "pli": {"y", "prefix"},
+        "heur": {"heuristic", "heuristic+1move", "heuristic+vnd", "heuristic+1move+vnd"},
+        "all": None,
+    }
+    keep = keep_sets.get(include, None)
+    if keep is not None:
+        points = [p for p in points if p[0] in keep]
+
+    # pulizia e validazione
+    pts = [(a, i, rt, ax) for (a, i, rt, ax) in points
+           if (rt == rt and rt > 0) and (ax == ax and ax >= 1.0)]
+
+    print(f"[Q5] righe lette={len(points)}, righe valide={len(pts)}, punti={len(pts)}")
+
+    if not pts:
+        _render_no_data(out_png, "Nessun dato disponibile per Q5")
+        return
+
+    # rimuovi duplicati identici
+    dedup = {}
+    for a, i, rt, ax in pts:
+        dedup[(a, i, rt, ax)] = (a, i, rt, ax)
+    pts = list(dedup.values())
+
+    # scatter
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(8, 5), dpi=150)
+
+    # raggruppa per algoritmo
+    by_algo = {}
+    for a, i, rt, ax in pts:
+        by_algo.setdefault(a, []).append((rt, ax, i))
+
+    for a, lst in by_algo.items():
+        xs = [x for (x, _, __) in lst]
+        ys = [y for (_, y, __) in lst]
+        plt.scatter(xs, ys, label=a, alpha=0.9)
+        if annotate:
+            for x, y, inst in lst:
+                plt.annotate(inst, (x, y), fontsize=7, alpha=.75)
+
+    plt.axhline(1.0, ls="--", lw=1)
+    plt.xlabel("Runtime (s)" + (f" (cap={cap_sec}s)" if cap_sec else ""))
+    plt.ylabel("Approssimazione (C / LB)")
+    if logx:
+        plt.xscale("log")
+    plt.title("Q5 – APX vs Runtime")
+    plt.legend(title="Algoritmo")
+    plt.tight_layout()
+    plt.savefig(out_png)
+    plt.close()
+
+
+# se non c'è già nel file, aggiungi/lascia questa helper:
+def _render_no_data(out_png, msg):
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(8, 4), dpi=150)
+    plt.text(0.5, 0.5, msg, ha="center", va="center")
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig(out_png)
+    plt.close()

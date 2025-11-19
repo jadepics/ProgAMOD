@@ -28,7 +28,13 @@ from salbp.plots_heuristic import (
     plot_h8_deltaC_by_phase,
     plot_h11_tradeoff,
 )
-from salbp.plots_quality import plot_q1_apx_box, plot_q2_apx_ecdf, plot_q3_success_rate, plot_q4_runtime_ecdf
+from salbp.plots_quality import (
+    plot_q1_apx_box,
+    plot_q2_apx_ecdf,
+    plot_q3_success_rate,
+    plot_q4_runtime_ecdf,
+    plot_q5_apx_vs_runtime,
+)
 
 from salbp.vnd import vnd_search  # VND metaeuristica
 
@@ -493,6 +499,13 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
             compare_dir = base / "compare"
             compare_dir.mkdir(parents=True, exist_ok=True)
 
+            # DEBUG: elenca i run_metrics_* trovati
+            try:
+                for p in base.rglob("run_metrics_*.csv"):
+                    print("[Q5-debug] seen:", p)
+            except Exception as _e:
+                print("[Q5-debug] listing failed:", _e)
+
             # sempre in compare
             plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
             plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
@@ -501,6 +514,13 @@ def solve_and_report(model, inst, args, outdir: Path, tag: str):
             # NEW: Q4 – ECDF runtime (cap ai time-limit se presenti)
             plot_q4_runtime_ecdf(metrics_source=base, out_png=str(compare_dir / "Q4_runtime_ecdf.png"),
                                  include="all", cap_sec=args.time_limit, logx=False)
+
+            # NEW: Q5 – APX vs Runtime (tutti gli algoritmi presenti)
+            plot_q5_apx_vs_runtime(metrics_source=base, out_png=str(compare_dir / "Q5_apx_vs_runtime.png"),
+                                   include="all", cap_sec=args.time_limit, logx=False, annotate=False)
+
+
+
 
 
 
@@ -984,6 +1004,13 @@ def solve_heuristic_only(inst, args, outdir: Path):
             compare_dir = base / "compare"
             compare_dir.mkdir(parents=True, exist_ok=True)
 
+            # DEBUG: elenca i run_metrics_* trovati
+            try:
+                for p in base.rglob("run_metrics_*.csv"):
+                    print("[Q5-debug] seen:", p)
+            except Exception as _e:
+                print("[Q5-debug] listing failed:", _e)
+
             # salva SEMPRE in compare/
             plot_q1_apx_box(metrics_source=base, out_png=str(compare_dir / "Q1_apx_box.png"))
             plot_q2_apx_ecdf(metrics_source=base, out_png=str(compare_dir / "Q2_apx_ecdf.png"), include="all")
@@ -993,9 +1020,12 @@ def solve_heuristic_only(inst, args, outdir: Path):
             plot_q4_runtime_ecdf(metrics_source=base, out_png=str(compare_dir / "Q4_runtime_ecdf.png"),
                                  include="all", cap_sec=args.time_limit, logx=False)
 
+            # NEW: Q5 – APX vs Runtime (anche per le euristiche)
+            plot_q5_apx_vs_runtime(metrics_source=base, out_png=str(compare_dir / "Q5_apx_vs_runtime.png"),
+                                   include="all", cap_sec=args.time_limit, logx=False, annotate=False)
 
         except Exception as _eQ:
-            print(f"[WARN] Q1/Q2 plot non salvati: {_eQ}")
+            print(f"[WARN] plot non salvati: {_eQ}")
 
 
 
@@ -1118,6 +1148,11 @@ def main():
             # Q4 – ECDF runtime (solo PLI: y, prefix)
             plot_q4_runtime_ecdf(metrics_source=base, out_png=str(compare_dir / "Q4_runtime_ecdf.png"),
                                  include="pli", cap_sec=args.time_limit, logx=False)
+
+            # Q5 – APX vs Runtime (solo PLI)
+            plot_q5_apx_vs_runtime(metrics_source=base, out_png=str(compare_dir / "Q5_apx_vs_runtime.png"),
+                                   include="pli", cap_sec=args.time_limit, logx=False, annotate=False)
+
 
 
         except Exception as _eQ:
