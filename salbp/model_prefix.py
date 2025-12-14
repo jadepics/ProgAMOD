@@ -59,10 +59,19 @@ class SALBPPrefixModel:
                 self.model.addConstr(self.u[i,s] == self.u[i,s-1] + self.x[i,s], name=f"u_def[{i},{s}]")
 
         # Precedenze: u[j,s] ≥ u[i,s]  ∀s
-        for (j) in tasks:
-            for p in preds.get(j, []):
+     #   for (j) in tasks:
+      #      for p in preds.get(j, []):
+       #         for s in S:
+        #            self.model.addConstr(self.u[j,s] >= self.u[p,s], name=f"prec[{p}->{j},s={s}]")
+
+        # Precedenze: u[p,s] ≥ u[j,s] ∀s  (p è predecessore di j)
+        for j in tasks:
+            for p in preds.get(j, []):  # p è un predecessore di j
                 for s in S:
-                    self.model.addConstr(self.u[j,s] >= self.u[p,s], name=f"prec[{p}->{j},s={s}]")
+                    self.model.addConstr(
+                        self.u[p, s] >= self.u[j, s],
+                        name=f"prec[{p}->{j},s={s}]"
+                    )
 
         # Capacità per stazione
         for s in S:
